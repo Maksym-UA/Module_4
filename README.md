@@ -52,7 +52,7 @@ GPIO18 - UART1 RX ← STM32 TX
 
 - VS Code
 - PlatformIO extension
-- ESP-IDF toolchain (installed automatically by PlatformIO)
+- Arduino framework for ESP32 (installed automatically by PlatformIO)
 
 ## Build and run
 
@@ -76,7 +76,7 @@ pio device monitor -b 115200
 
 ## Configuration
 
-- Framework: `espidf`
+- Framework: `arduino`
 - Monitor speed: `115200`
 - Flash mode/size: `qio`, `16 MB`
 
@@ -84,9 +84,8 @@ pio device monitor -b 115200
 
 ```
 src/
-  main.cpp        - app_main(): UART1 init, button polling, LED blink, UART bridge
-platformio.ini    - board and build settings
-sdkconfig.esp32-s3-devkitc-1  - ESP-IDF sdkconfig
+  main.cpp        - setup()/loop(): UART1 init, button polling, LED blink control
+platformio.ini    - board and build settings (Arduino framework)
 ```
 
 ## Contact
