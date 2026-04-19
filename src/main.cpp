@@ -1,87 +1,94 @@
+#include <cinttypes>
+
+#include <driver/gpio.h>
+#include <driver/uart.h>
+#include <esp_log.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
-#include <esp_timer.h>
 
-#include "buzzer.hpp"
-#include "encoder.hpp"
-#include "servo.hpp"
+namespace {
+// UART1: Device communication
+constexpr uart_port_t kDeviceUart = UART_NUM_1;
+constexpr gpio_num_t kDeviceTxPin = GPIO_NUM_17;
+constexpr gpio_num_t kDeviceRxPin = GPIO_NUM_18;
+constexpr int kDeviceBaudRate = 9600;
 
-const float SERVO_COUNTS_PER_DEGREE = 2.0f;
-const float SERVO_DIRECTION = -1.0f;
-const unsigned long BUTTON_LONG_PRESS_MS = 1000;
-const unsigned long LIMIT_BEEP_COOLDOWN_MS = 120;
+// UART0: USB Serial Monitor (uses default pins via USB)
+constexpr uart_port_t kMonitorUart = UART_NUM_0;
+constexpr int kMonitorBaudRate = 115200;
 
-unsigned long get_millis() {
-    return (unsigned long)(esp_timer_get_time() / 1000);
+constexpr int kRxBufferSize = 256;
+constexpr TickType_t kReadTimeout = pdMS_TO_TICKS(20);
+
+const char *TAG = "uart_bridge";
+
+void initUart() {
+    // Initialize UART1 (device communication)
+    const uart_config_t device_config = {
+        .baud_rate = kDeviceBaudRate,
+        .data_bits = UART_DATA_8_BITS,
+        .parity = UART_PARITY_DISABLE,
+        .stop_bits = UART_STOP_BITS_1,
+        .flow_ctrl = UART_HW_FLOWCTRL_DISABLE,
+        .rx_flow_ctrl_thresh = 0,
+        .source_clk = UART_SCLK_DEFAULT,
+        .flags = {},
+    };
+
+    ESP_ERROR_CHECK(uart_driver_install(kDeviceUart, kRxBufferSize, 0, 0, nullptr, 0));
+    ESP_ERROR_CHECK(uart_param_config(kDeviceUart, &device_config));
+    ESP_ERROR_CHECK(uart_set_pin(kDeviceUart, kDeviceTxPin, kDeviceRxPin,
+                                 UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE));
+
+    // Initialize UART0 (monitor) - already initialized by IDF, but reconfigure baud if needed
+    const uart_config_t monitor_config = {
+        .baud_rate = kMonitorBaudRate,
+        .data_bits = UART_DATA_8_BITS,
+        .parity = UART_PARITY_DISABLE,
+        .stop_bits = UART_STOP_BITS_1,
+        .flow_ctrl = UART_HW_FLOWCTRL_DISABLE,
+        .rx_flow_ctrl_thresh = 0,
+        .source_clk = UART_SCLK_DEFAULT,
+        .flags = {},
+    };
+
+    ESP_ERROR_CHECK(uart_param_config(kMonitorUart, &monitor_config));
+}
 }
 
-extern "C" void app_main() {
-    Servo servo;
-    Buzzer buzzer;
-    QuadratureEncoder encoder;
-    servo.setup();
-    buzzer.setup();
+extern "C" void app_main(void) {
+    initUart();
 
-    float current_servo_angle = Servo::kCenterAngle;
-    float servo_step_scale = 1.0f;
-    servo.setAngle(current_servo_angle);
-    int last_servo_count = encoder.getCount();
+    ESP_LOGI(TAG, "=== UART Bridge Initialized ===");
+    ESP_LOGI(TAG, "UART1 (Device): TX=GPIO17 RX=GPIO18 @ %d baud", kDeviceBaudRate);
+    ESP_LOGI(TAG, "UART0 (Monitor): USB @ %d baud", kMonitorBaudRate);
+    ESP_LOGI(TAG, "Data from monitor forwards to device and vice versa");
 
-    bool last_btn = false;
-    bool long_press_handled = false;
-    unsigned long button_press_start = 0;
-    unsigned long last_limit_beep_time = 0;
-
+    std::uint8_t device_buffer[kRxBufferSize];
+    std::uint8_t monitor_buffer[kRxBufferSize];
 
     while (true) {
-        encoder.calculateRpm();
-        encoder.detectDirection();
-
-        int current_count = encoder.getCount();
-        int delta_count = current_count - last_servo_count;
-        if (delta_count != 0) {
-            float requested_servo_angle = current_servo_angle + (SERVO_DIRECTION * (((float)delta_count / SERVO_COUNTS_PER_DEGREE) * servo_step_scale));
-            float target_servo_angle = servo.clampAngle(requested_servo_angle);
-
-            if (target_servo_angle != requested_servo_angle) {
-                unsigned long now = get_millis();
-                if ((now - last_limit_beep_time) >= LIMIT_BEEP_COOLDOWN_MS) {
-                    buzzer.playLimitBeep();
-                    last_limit_beep_time = get_millis();
-                }
+        // Read from device (UART1) and forward to monitor (UART0)
+        int device_bytes = uart_read_bytes(kDeviceUart, device_buffer, sizeof(device_buffer), kReadTimeout);
+        if (device_bytes > 0) {
+            ESP_LOGI(TAG, "[Device→Monitor] %d bytes received from UART1", device_bytes);
+            for (int i = 0; i < device_bytes; ++i) {
+                ESP_LOGI(TAG, "  Byte %d: 0x%02" PRIX8, i, device_buffer[i]);
             }
-
-            if (target_servo_angle != current_servo_angle) {
-                servo.setAngle(target_servo_angle);
-                current_servo_angle = target_servo_angle;
-            }
-            last_servo_count = current_count;
+            // Forward to monitor
+            uart_write_bytes(kMonitorUart, reinterpret_cast<const char *>(device_buffer), device_bytes);
         }
 
-        bool current_btn = encoder.isButtonPressed();
-        if (current_btn && !last_btn) {
-            button_press_start = get_millis();
-            long_press_handled = false;
-        }
-
-        if (current_btn && !long_press_handled) {
-            unsigned long press_time = get_millis() - button_press_start;
-            if (press_time >= BUTTON_LONG_PRESS_MS) {
-                servo_step_scale = 1.0f;
-                encoder.reset();
-                current_servo_angle = Servo::kCenterAngle;
-                servo.setAngle(current_servo_angle);
-                last_servo_count = 0;
-                long_press_handled = true;
+        // Read from monitor (UART0) and forward to device (UART1)
+        int monitor_bytes = uart_read_bytes(kMonitorUart, monitor_buffer, sizeof(monitor_buffer), kReadTimeout);
+        if (monitor_bytes > 0) {
+            ESP_LOGI(TAG, "[Monitor→Device] %d bytes received from UART0", monitor_bytes);
+            for (int i = 0; i < monitor_bytes; ++i) {
+                ESP_LOGI(TAG, "  Byte %d: 0x%02" PRIX8, i, monitor_buffer[i]);
             }
+            // Forward to device
+            uart_write_bytes(kDeviceUart, reinterpret_cast<const char *>(monitor_buffer), monitor_bytes);
         }
-
-        if (!current_btn && last_btn) {
-            if (!long_press_handled) {
-                servo_step_scale *= 0.5f;
-            }
-        }
-        last_btn = current_btn;
 
         vTaskDelay(pdMS_TO_TICKS(10));
     }
