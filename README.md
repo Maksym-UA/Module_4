@@ -1,35 +1,62 @@
-# UART communication between ESP32 S3 and STM32-STM32F411CEU6-Black-Pill
+# Bidirectional LED/Blink Control: ESP32-S3 ↔ STM32F411CEU6 via UART
 
-Project
-При натисненні кнопки на стороні ESP32 змінюється стан світлодіода на стороні STM32 (Вже зробили протягом уроку)
-При натисненні кнопки на стороні STM32 змінюється стан світлодіода на стороні ESP32.
+## Project description
+
+Two-way button-controlled LED/blink system over UART:
+
+- Pressing the **button on ESP32-S3** sends command `'T'` to STM32 → toggles STM32 LED blinking.
+- Pressing the **button on STM32** sends command `'T'` to ESP32 → toggles ESP32 onboard LED blinking (500 ms interval).
+
+Both sides use the same single-byte command protocol: `'T'` = toggle blink state.
 
 ## Hardware
 
-- Board: ESP32-S3-DevKitC-1
-- Board: STM32-STM32F411CEU6
-- ST-Link V2 programmer
+| Component | Details |
+|---|---|
+| MCU 1 | ESP32-S3-DevKitC-1 |
+| MCU 2 | STM32F411CEU6 (Black Pill) |
+| Programmer | ST-Link V2 (for STM32) |
 
 ## Wiring
 
+### UART connection (ESP32-S3 ↔ STM32)
+
 ```
-Encoder:
-  - CLK - Channel B - GIO4
-  - DT - Channel A - GPIO5
-  - SW - Button - GPIO6
-  - VCC - 3.3V
-  - GND - GND (common ground with ESP32-S3)
+ESP32-S3    STM32F411
+--------    ---------
+GPIO17 TX → RX (e.g. PA10 / USART1)
+GPIO18 RX ← TX (e.g. PA9  / USART1)
+GND       — GND  (common ground required)
 ```
+
+### ESP32-S3 pins
+
+```
+GPIO0  - BOOT button (active low, built-in pull-up)
+GPIO2  - Onboard LED (output)
+GPIO17 - UART1 TX → STM32 RX
+GPIO18 - UART1 RX ← STM32 TX
+```
+
+## Protocol
+
+| Sender | Byte | Effect on receiver |
+|---|---|---|
+| ESP32 button pressed | `'T'` (0x54) | STM32 toggles its LED blink |
+| STM32 button pressed | `'T'` (0x54) | ESP32 toggles its LED blink |
+
+- Baud rate: **115200** on both sides (8N1, no flow control)
+- Debounce: 40 ms edge-triggered on ESP32 side
 
 ## Software requirements
 
 - VS Code
 - PlatformIO extension
-- ESP-IDF toolchain (installed by PlatformIO for this environment)
+- ESP-IDF toolchain (installed automatically by PlatformIO)
 
 ## Build and run
 
-From the project root:
+Build firmware:
 
 ```bash
 pio run
@@ -49,18 +76,18 @@ pio device monitor -b 115200
 
 ## Configuration
 
-### Configuration notes
-
 - Framework: `espidf`
 - Monitor speed: `115200`
-- Flash mode/size: `qio`, `16MB`
+- Flash mode/size: `qio`, `16 MB`
 
 ## Project structure
 
-- `src/main.cpp` - ESP-IDF `app_main()` with UART1 setup, logging, and echo logic
-- `platformio.ini` - board and build settings
-- `sdkconfig.esp32-s3-devkitc-1` - ESP-IDF configuration
-
+```
+src/
+  main.cpp        - app_main(): UART1 init, button polling, LED blink, UART bridge
+platformio.ini    - board and build settings
+sdkconfig.esp32-s3-devkitc-1  - ESP-IDF sdkconfig
+```
 
 ## Contact
 
