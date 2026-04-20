@@ -10,23 +10,23 @@ constexpr int kPinTx     = 17;  // UART1 TX → STM32 RX
 constexpr int kPinRx     = 18;  // UART1 RX ← STM32 TX
 
 #ifdef RGB_BUILTIN
-constexpr int kRgbPin = RGB_BUILTIN;
+constexpr int kRgbPin = RGB_BUILTIN; //C++ naming convention for constants
 #else
 constexpr int kRgbPin = 48;
 #endif
 
-// Timing
+
 constexpr unsigned long kBlinkIntervalMs = 500;
 constexpr unsigned long kDebounceMs      = 40;
 
-// State
+
 bool          isBlinking       = false;
 bool          ledState         = false;
 unsigned long lastBlinkMs      = 0;
 unsigned long lastButtonMs     = 0;
 bool          wasButtonPressed = false;
 
-
+//set RGB LED color (blue when on, off otherwise)
 void setRgbLed(bool on) {
     if (on) {
         neopixelWrite(kRgbPin, 0, 20, 32);
@@ -38,7 +38,10 @@ void setRgbLed(bool on) {
 void setup() {
 
     Serial.begin(115200);
+
     unsigned long serialWaitStart = millis();
+
+    //give the USB serial connection time to come up after Serial.begin(...)
     while (!Serial && (millis() - serialWaitStart) < 2500) {
         delay(10);
     }
