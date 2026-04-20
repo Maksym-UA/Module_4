@@ -5,7 +5,7 @@
 Two-way button-controlled LED/blink system over UART:
 
 - Pressing the **button on ESP32-S3** sends command `'T'` to STM32 → toggles STM32 LED blinking.
-- Pressing the **button on STM32** sends command `'T'` to ESP32 → toggles ESP32 onboard LED blinking (500 ms interval).
+- Pressing the **button on STM32** sends command `'T'` to ESP32 → toggles ESP32 onboard RGB LED blinking (500 ms interval).
 
 Both sides use the same single-byte command protocol: `'T'` = toggle blink state.
 
@@ -13,7 +13,7 @@ Both sides use the same single-byte command protocol: `'T'` = toggle blink state
 
 | Component | Details |
 |---|---|
-| MCU 1 | ESP32-S3-DevKitC-1 |
+| MCU 1 | Espressif ESP32-S3-Wroom-1-n16r8 |
 | MCU 2 | STM32F411CEU6 (Black Pill) |
 | Programmer | ST-Link V2 (for STM32) |
 
@@ -33,7 +33,7 @@ GND       — GND  (common ground required)
 
 ```
 GPIO0  - BOOT button (active low, built-in pull-up)
-GPIO2  - Onboard LED (output)
+RGB_BUILTIN (fallback GPIO48) - onboard RGB LED (NeoPixel)
 GPIO17 - UART1 TX → STM32 RX
 GPIO18 - UART1 RX ← STM32 TX
 ```
@@ -79,12 +79,13 @@ pio device monitor -b 115200
 - Framework: `arduino`
 - Monitor speed: `115200`
 - Flash mode/size: `qio`, `16 MB`
+- Source filter: compile only `src/main.cpp` (`build_src_filter = +<main.cpp>`)
 
 ## Project structure
 
 ```
 src/
-  main.cpp        - setup()/loop(): UART1 init, button polling, LED blink control
+  main.cpp        - setup()/loop(): UART1 init, button polling, RGB LED blink control
 platformio.ini    - board and build settings (Arduino framework)
 ```
 
