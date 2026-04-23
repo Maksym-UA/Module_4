@@ -1,21 +1,21 @@
-# Bidirectional LED/Blink Control: ESP32-S3 ↔ STM32F411CEU6 via UART
+# SSD1306 OLED Display controlled by ESP32-S3 (I2c)
 
 ## Project description
 
-Two-way button-controlled LED/blink system over UART:
-
-- Pressing the **button on ESP32-S3** sends command `'T'` to STM32 → toggles STM32 LED blinking.
-- Pressing the **button on STM32** sends command `'T'` to ESP32 → toggles ESP32 onboard RGB LED blinking (500 ms interval).
-
-Both sides use the same single-byte command protocol: `'T'` = toggle blink state.
+drawStr only accepts "string literals" (text in quotes). If you want to display a variable (like a sensor reading), use u8g2.print() instead:
+int battery = 85;
+u8g2.setCursor(0, 20); // Set position for print
+u8g2.print("Battery: ");
+u8g2.print(battery);
+u8g2.print("%");
 
 ## Hardware
 
 | Component | Details |
 |---|---|
-| MCU 1 | Espressif ESP32-S3-Wroom-1-n16r8 |
-| MCU 2 | STM32F411CEU6 (Black Pill) |
-| Programmer | ST-Link V2 (for STM32) |
+| MCU | Espressif ESP32-S3-Wroom-1-n16r8 |
+| Display | SSD1306 OLED Display |
+
 
 ## Wiring
 

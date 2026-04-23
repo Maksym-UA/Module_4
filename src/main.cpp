@@ -1,102 +1,64 @@
 #include <Arduino.h>
-#include <HardwareSerial.h>
+#include <Wire.h>
+#include <U8g2lib.h>
 
-// UART1: connection to STM32 — TX=GPIO17, RX=GPIO18
-HardwareSerial stm32Serial(1);
+#define OLED_SDA_PIN 8
+#define OLED_SCL_PIN 9
 
+//constructor for the SSD1306 128x64 OLED display
+//use U8G2_SSD1306_128X64_NONAME_F_HW_I2C for hardware I2C
+// Constructor format: Rotation, Reset Pin, Clock Pin (SCL), Data Pin (SDA)
+U8G2_SSD1306_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0, /* reset=*/ U8X8_PIN_NONE, /* clock=*/ OLED_SCL_PIN, /* data=*/ OLED_SDA_PIN);
 
-constexpr int kButtonPin = 0;   // BOOT button (active low, built-in pull-up)
-constexpr int kPinTx     = 17;  // UART1 TX → STM32 RX
-constexpr int kPinRx     = 18;  // UART1 RX ← STM32 TX
+void scanI2CDevices() {
+  uint8_t found = 0;
+  Serial.println("I2C scan start...");
 
-#ifdef RGB_BUILTIN
-constexpr int kRgbPin = RGB_BUILTIN; //C++ naming convention for constants
-#else
-constexpr int kRgbPin = 48;
-#endif
-
-
-constexpr unsigned long kBlinkIntervalMs = 500;
-constexpr unsigned long kDebounceMs      = 40;
-
-
-bool          isBlinking       = false;
-bool          ledState         = false;
-unsigned long lastBlinkMs      = 0;
-unsigned long lastButtonMs     = 0;
-bool          wasButtonPressed = false;
-
-//set RGB LED color (blue when on, off otherwise)
-void setRgbLed(bool on) {
-    if (on) {
-        neopixelWrite(kRgbPin, 0, 20, 32);
-    } else {
-        neopixelWrite(kRgbPin, 0, 0, 0);
+  for (uint8_t addr = 1; addr < 127; addr++) {
+    Wire.beginTransmission(addr);
+    if (Wire.endTransmission() == 0) {
+      Serial.print("Found I2C device at 0x");
+      if (addr < 16) {
+        Serial.print('0');
+      }
+      Serial.println(addr, HEX);
+      found++;
     }
+  }
+
+  if (found == 0) {
+    Serial.println("No I2C devices found");
+  }
 }
 
 void setup() {
 
     Serial.begin(115200);
+    delay(400); // Wait for serial to initialize
 
-    unsigned long serialWaitStart = millis();
+    Wire.begin(OLED_SDA_PIN, OLED_SCL_PIN);
+    scanI2CDevices();
+    // Initialize the display
+    u8g2.begin();
 
-    //give the USB serial connection time to come up after Serial.begin(...)
-    while (!Serial && (millis() - serialWaitStart) < 2500) {
-        delay(10);
-    }
-    delay(200);
-
-    // UART1: STM32 communication — TX=17, RX=18, 115200 8N1
-    stm32Serial.begin(115200, SERIAL_8N1, kPinRx, kPinTx);
-
-    // Button: active low with internal pull-up
-    pinMode(kButtonPin, INPUT_PULLUP);
-
-    // RGB LED: start off
-    pinMode(kRgbPin, OUTPUT);
-    setRgbLed(false);
-
-    Serial.println("=== STM32 Controller Ready ===");
-    Serial.println("TX: GPIO17 | RX: GPIO18 | 115200 baud rate");
-    Serial.println("Press BOOT button to toggle STM32 blink.");
+    //Set i2c clock speed to 100kHz
+    Wire.setClock(100000);
 }
 
 void loop() {
-    //Receive from STM32, toggle local blink on 'T'
-    while (stm32Serial.available()) {
-        const char ch = static_cast<char>(stm32Serial.read());
-        if (ch == 'T') {
-            isBlinking = !isBlinking;
-            if (!isBlinking) {
-                setRgbLed(false);
-                ledState = false;
-            }
-            Serial.print("Received 'T' from STM32 → Blink: ");
-            Serial.println(isBlinking ? "ON" : "OFF");
-        }
-    }
+    // Clear the display buffer
+    u8g2.clearBuffer();
+    u8g2.setFont(u8g2_font_ncenB08_tr);
 
-    //Button press → send 'T' to STM32 (edge + debounce)
-    const bool isPressed = (digitalRead(kButtonPin) == LOW);
-    const unsigned long now = millis();
+    // Draw some text on the display
+    u8g2.drawStr(15, 25, "Hello, World!");
+    u8g2.drawStr(25, 45, "SSD1306 OLED");
 
-    if (isPressed && !wasButtonPressed && (now - lastButtonMs) >= kDebounceMs) {
-        stm32Serial.print('T');
-        lastButtonMs = now;
-        Serial.println("Button pressed → Sent 'T' to STM32");
-    }
-    wasButtonPressed = isPressed;
+    u8g2.drawFrame(0, 0, 128, 64);      // Draw a border around the screen
 
-    //Non-blocking blink control
-    if (isBlinking) {
-        if (now - lastBlinkMs >= kBlinkIntervalMs) {
-            ledState = !ledState;
-            setRgbLed(ledState);
-            lastBlinkMs = now;
-        }
-    } else if (ledState) {
-        ledState = false;
-        setRgbLed(false);
-    }
+    // Send the buffer to the display
+    u8g2.sendBuffer();
+
+    // Wait for a while before updating the display again
+    delay(2000);
 }
