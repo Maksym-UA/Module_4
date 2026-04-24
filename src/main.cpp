@@ -27,8 +27,8 @@ void scanI2CDevices() {
       Serial.println(addr, HEX);
       if (foundCount < kMaxFoundDevices) {
         foundAddresses[foundCount] = addr;
+        foundCount++;
       }
-      foundCount++;
     }
   }
 
@@ -36,7 +36,6 @@ void scanI2CDevices() {
     Serial.println("No I2C devices found");
   }
 }
-
 
 
 void setup() {
@@ -88,7 +87,9 @@ void setup() {
     u8g2.sendF("c",  0xA7);          // 14. Inverse mode
     u8g2.sendF("c",  0xAF);          // 15. Display ON
 
+     Serial.println("Setup complete");
 }
+
 
 void loop() {
     static uint32_t frame = 0;
@@ -105,7 +106,7 @@ void loop() {
     } else {
       const uint8_t shownCount = (foundCount > kMaxFoundDevices) ? kMaxFoundDevices : foundCount;
       for (uint8_t i = 0; i < shownCount; ++i) {
-        u8g2.setCursor(2, 38 + (i * 20)); //move the text downward by 20 pixels per item.
+        u8g2.setCursor(2, 38 + (i * 10)); //move the text downward by 10 pixels per item.
         u8g2.print("0x"); // Print the I2C address in hex format
         if (foundAddresses[i] < 16) {
           u8g2.print('0');
