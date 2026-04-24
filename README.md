@@ -1,92 +1,88 @@
-# SSD1306 OLED Display controlled by ESP32-S3 (I2c)
+# SSD1306 OLED on ESP32-S3 (I2C, U8g2)
 
 ## Project description
 
-drawStr only accepts "string literals" (text in quotes). If you want to display a variable (like a sensor reading), use u8g2.print() instead:
-int battery = 85;
-u8g2.setCursor(0, 20); // Set position for print
-u8g2.print("Battery: ");
-u8g2.print(battery);
-u8g2.print("%");
+This project drives a 128x64 SSD1306 OLED display from an ESP32-S3 using I2C and the U8g2 library.
+
+Current firmware behavior:
+- Initializes USB serial monitor at 115200 baud.
+- Initializes I2C on custom pins (`SDA=GPIO8`, `SCL=GPIO9`).
+- Scans the I2C bus and prints detected device addresses.
+- Initializes the OLED (`SSD1306`, rotation `U8G2_R2`).
+- Draws `"Module 4.2"` and a screen frame, updates every 500 ms.
+- Prints a frame counter to serial monitor (`Display frame: ...`).
 
 ## Hardware
 
 | Component | Details |
 |---|---|
-| MCU | Espressif ESP32-S3-Wroom-1-n16r8 |
-| Display | SSD1306 OLED Display |
-
+| MCU | ESP32-S3-WROOM-1 (DevKit) |
+| Display | SSD1306 128x64 OLED (I2C) |
 
 ## Wiring
 
-### UART connection (ESP32-S3 ↔ STM32)
+### I2C connection
 
 ```
-ESP32-S3    STM32F411
---------    ---------
-GPIO17 TX → RX (e.g. PA10 / USART1)
-GPIO18 RX ← TX (e.g. PA9  / USART1)
-GND       — GND  (common ground required)
+ESP32-S3      SSD1306 OLED
+---------     ------------
+GPIO8 (SDA) → SDA
+GPIO9 (SCL) → SCL
+3V3         → VCC
+GND         → GND
 ```
 
-### ESP32-S3 pins
-
-```
-GPIO0  - BOOT button (active low, built-in pull-up)
-RGB_BUILTIN (fallback GPIO48) - onboard RGB LED (NeoPixel)
-GPIO17 - UART1 TX → STM32 RX
-GPIO18 - UART1 RX ← STM32 TX
-```
-
-## Protocol
-
-| Sender | Byte | Effect on receiver |
-|---|---|---|
-| ESP32 button pressed | `'T'` (0x54) | STM32 toggles its LED blink |
-| STM32 button pressed | `'T'` (0x54) | ESP32 toggles its LED blink |
-
-- Baud rate: **115200** on both sides (8N1, no flow control)
-- Debounce: 40 ms edge-triggered on ESP32 side
+Notes:
+- Use common ground.
+- Most SSD1306 I2C modules use address `0x3C` (sometimes `0x3D`).
 
 ## Software requirements
 
 - VS Code
 - PlatformIO extension
-- Arduino framework for ESP32 (installed automatically by PlatformIO)
+- Arduino framework for ESP32
+- U8g2 library (`olikraus/U8g2`)
 
 ## Build and run
 
-Build firmware:
+Build:
 
 ```bash
 pio run
 ```
 
-Upload firmware:
+Upload:
 
 ```bash
 pio run -t upload
 ```
 
-Open serial monitor (115200 baud):
+Monitor:
 
 ```bash
 pio device monitor -b 115200
 ```
 
+Expected startup logs:
+- `Setup start`
+- `I2C scan start...`
+- `Found I2C device at 0x3C` (or `0x3D`)
+
 ## Configuration
 
 - Framework: `arduino`
 - Monitor speed: `115200`
-- Flash mode/size: `qio`, `16 MB`
-- Source filter: compile only `src/main.cpp` (`build_src_filter = +<main.cpp>`)
+- Build flags:
+  - `ARDUINO_USB_MODE=1`
+  - `ARDUINO_USB_CDC_ON_BOOT=1`
+- Source filter: `build_src_filter = +<main.cpp>`
 
 ## Project structure
 
 ```
 src/
-  main.cpp        - setup()/loop(): UART1 init, button polling, RGB LED blink control
-platformio.ini    - board and build settings (Arduino framework)
+  main.cpp      - OLED init, I2C scan, and display rendering loop
+platformio.ini  - PlatformIO board/framework/build settings
 ```
 
 ## Contact
