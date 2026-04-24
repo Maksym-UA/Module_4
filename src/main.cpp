@@ -7,9 +7,14 @@
 
 // HW I2C constructor — pins are set via Wire.begin(), no pin args needed here
 U8G2_SSD1306_128X64_NONAME_F_HW_I2C u8g2(U8G2_R2, U8X8_PIN_NONE);
+//U8G2_R2 = 180-degree rotation (flipped both horizontally and vertically)
+
+constexpr uint8_t kMaxFoundDevices = 16;
+uint8_t foundAddresses[kMaxFoundDevices] = {0};
+uint8_t foundCount = 0;
 
 void scanI2CDevices() {
-  uint8_t found = 0;
+  foundCount = 0;
   Serial.println("I2C scan start...");
 
   for (uint8_t addr = 1; addr < 127; addr++) {
@@ -20,14 +25,19 @@ void scanI2CDevices() {
         Serial.print('0');
       }
       Serial.println(addr, HEX);
-      found++;
+      if (foundCount < kMaxFoundDevices) {
+        foundAddresses[foundCount] = addr;
+      }
+      foundCount++;
     }
   }
 
-  if (found == 0) {
+  if (foundCount == 0) {
     Serial.println("No I2C devices found");
   }
 }
+
+
 
 void setup() {
 
@@ -58,6 +68,7 @@ void setup() {
     } */
 
     u8g2.begin();
+    u8g2.enableUTF8Print();
 
     // Execute manual training sequence
     u8g2.sendF("c",  0xAE);          // 1. Display OFF
@@ -72,7 +83,10 @@ void setup() {
     u8g2.sendF("ca", 0xD9, 0x22);    // 10. Pre-charge Period
     u8g2.sendF("ca", 0xDB, 0x20);    // 11. VCOMH Deselect Level
     u8g2.sendF("ca", 0x8D, 0x14);    // 12. Charge Pump ENABLE (Required for 3.3V)
-    u8g2.sendF("c",  0xAF);          // 13. Display ON
+    // u8g2.sendF("ca", 0xA4, 0x00);    // 13. Entire Display ON (Normal)
+    u8g2.sendF("c",  0xA4);          // 13. Entire display follows RAM
+    u8g2.sendF("c",  0xA7);          // 14. Inverse mode
+    u8g2.sendF("c",  0xAF);          // 15. Display ON
 
 }
 
@@ -81,8 +95,25 @@ void loop() {
     ++frame;
 
     u8g2.clearBuffer();
-    u8g2.setFont(u8g2_font_ncenB08_tr);
-    u8g2.drawStr(15, 25, "Module 4.2");
+    u8g2.setFont(u8g2_font_unifont_t_cyrillic);
+    u8g2.drawUTF8(2, 10, u8"Модуль 4.2:");
+    u8g2.setFont(u8g2_font_6x12_tr);
+    u8g2.drawStr(2, 24, "I2C scan results:");
+
+    if (foundCount == 0) {
+      u8g2.drawStr(2, 38, "No I2C devices found");
+    } else {
+      const uint8_t shownCount = (foundCount > kMaxFoundDevices) ? kMaxFoundDevices : foundCount;
+      for (uint8_t i = 0; i < shownCount; ++i) {
+        u8g2.setCursor(2, 38 + (i * 20)); //move the text downward by 20 pixels per item.
+        u8g2.print("0x"); // Print the I2C address in hex format
+        if (foundAddresses[i] < 16) {
+          u8g2.print('0');
+        }
+        u8g2.print(foundAddresses[i], HEX);
+      }
+    }
+
     u8g2.drawFrame(0, 0, 128, 64);
 
     u8g2.sendBuffer();
