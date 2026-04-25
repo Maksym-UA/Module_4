@@ -1,43 +1,50 @@
 #include <Arduino.h>
 #include <Wire.h>
-#include "I2CScanner.hpp"
+
+#include "DS1307clock.hpp"
 #include "SSD1306Display.hpp"
 
-#define OLED_SDA_PIN 8
-#define OLED_SCL_PIN 9
+namespace {
+constexpr uint8_t kOledSdaPin = 8;
+constexpr uint8_t kOledSclPin = 9;
+constexpr uint16_t kStartupMessageMs = 2000;
+}  // namespace
 
-app::I2CScanResult scanResult;
-app::SSD1306Display display;
+clock_app::DS1307clock rtc;
+clock_app::DateTime dateTime;
+oled_app::SSD1306Display display;
 
 
 void setup() {
-
     Serial.begin(115200);
-    unsigned long serialWaitStart = millis();
-    while (!Serial && (millis() - serialWaitStart) < 2500) {
-        delay(10);
-    }
-    delay(200);
+    Wire.begin(kOledSdaPin, kOledSclPin);
+    Wire.setClock(100000);
 
-    Serial.println("Setup start");
-    Wire.begin(OLED_SDA_PIN, OLED_SCL_PIN);
-    Wire.setClock(400000);
-
-    app::scanI2CDevices(Wire, Serial, scanResult);
     display.begin();
+    display.showStartupMessage("OLED initialized");
 
-     Serial.println("Setup complete");
+    delay(kStartupMessageMs);
+
+    Serial.println("System initialized!");
 }
 
 
 void loop() {
-    static uint32_t frame = 0;
-    ++frame;
+    if (!rtc.readDateTime(dateTime)) {
+        Serial.println("RTC read error");
+        display.showError("RTC read error");
+        delay(1000);
+        return;
+    }
 
-    display.renderScanResults(scanResult, frame);
+    Serial.printf("%02u:%02u:%02u\n", dateTime.hour, dateTime.minute, dateTime.second);
+    Serial.printf(
+        "%s %02u.%02u.%04u\n",
+        clock_app::DS1307clock::dayToShortName(dateTime.dayOfWeek),
+        dateTime.dayOfMonth,
+        dateTime.month,
+        dateTime.year);
 
-    Serial.print("Display frame: ");
-    Serial.println(frame);
-
-    delay(500);
+    display.showDateTime(dateTime);
+    delay(1000);
 }

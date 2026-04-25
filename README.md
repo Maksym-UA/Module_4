@@ -1,90 +1,78 @@
-# SSD1306 OLED on ESP32-S3 (I2C, U8g2)
+# Module 4
 
-## Project description
+Arduino/PlatformIO project for reading date and time from a **DS1307 RTC** over **I2C** and showing it on an **SSD1306 128x64 OLED** display.
 
-This project drives a 128x64 SSD1306 OLED display from an ESP32-S3 using I2C and the U8g2 library.
+## Features
 
-Current firmware behavior:
-- Initializes USB serial monitor at 115200 baud.
-- Initializes I2C on custom pins (`SDA=GPIO8`, `SCL=GPIO9`).
-- Scans the I2C bus and prints detected device addresses.
-- Initializes the OLED (`SSD1306`, rotation `U8G2_R2`).
-- Draws `"Module 4.2"` and a screen frame, updates every 500 ms.
-- Prints a frame counter to serial monitor (`Display frame: ...`).
+- Reads full date and time from the DS1307
+- Converts RTC hour data to **24-hour format**
+- Shows time as `HH:MM:SS`
+- Shows date as `EEE DD.MM.YYYY`
+- Uses helper headers to keep `main.cpp` clean
+- Uses `Wire.h` for I2C communication
+- Uses `U8g2lib.h` for OLED rendering
 
 ## Hardware
 
-| Component | Details |
-|---|---|
-| MCU | ESP32-S3-WROOM-1 (DevKit) |
-| Display | SSD1306 128x64 OLED (I2C) |
+- ESP32-S3 board using Arduino framework
+- DS1307 RTC module
+- SSD1306 128x64 OLED display
+- I2C wiring
 
-## Wiring
+## I2C configuration
 
-### I2C connection
+Current pins used in [src/main.cpp](src/main.cpp):
 
-```
-ESP32-S3      SSD1306 OLED
----------     ------------
-GPIO8 (SDA) → SDA
-GPIO9 (SCL) → SCL
-3V3         → VCC
-GND         → GND
-```
+- SDA: `8`
+- SCL: `9`
 
-Notes:
-- Use common ground.
-- Most SSD1306 I2C modules use address `0x3C` (sometimes `0x3D`).
+I2C device addresses:
 
-## Software requirements
+- DS1307 RTC: `0x68`
+- SSD1306 OLED: `0x3C`
 
-- VS Code
-- PlatformIO extension
-- Arduino framework for ESP32
-- U8g2 library (`olikraus/U8g2`)
+## Output format
 
-## Build and run
+Serial output and OLED output use the same layout:
 
-Build:
-
-```bash
-pio run
-```
-
-Upload:
-
-```bash
-pio run -t upload
-```
-
-Monitor:
-
-```bash
-pio device monitor -b 115200
-```
-
-Expected startup logs:
-- `Setup start`
-- `I2C scan start...`
-- `Found I2C device at 0x3C` (or `0x3D`)
-
-## Configuration
-
-- Framework: `arduino`
-- Monitor speed: `115200`
-- Build flags:
-  - `ARDUINO_USB_MODE=1`
-  - `ARDUINO_USB_CDC_ON_BOOT=1`
-- Source filter: `build_src_filter = +<main.cpp>`
+- Time: `15:33:59`
+- Date: `Sat 14.02.2026`
 
 ## Project structure
 
-```
-src/
-  main.cpp      - OLED init, I2C scan, and display rendering loop
-platformio.ini  - PlatformIO board/framework/build settings
+- [src/main.cpp](src/main.cpp) — application entry point, setup, and main loop
+- [include/DS1307clock.hpp](include/DS1307clock.hpp) — RTC helper, `DateTime` structure, BCD conversion, 24-hour decoding, and weekday text conversion
+- [include/SSD1306Display.hpp](include/SSD1306Display.hpp) — OLED display helper for startup, error, and date/time rendering
+- [include/I2CScanner.hpp](include/I2CScanner.hpp) — optional I2C scan helper
+
+## How it works
+
+1. `setup()` initializes Serial and I2C.
+2. The OLED displays a short startup message.
+3. `loop()` reads date/time from the DS1307 through `DS1307clock`.
+4. The formatted result is printed to Serial and rendered on the OLED through `SSD1306Display`.
+
+## Dependencies
+
+Libraries used:
+
+- `Wire`
+- `U8g2`
+
+The U8g2 dependency is already declared in [platformio.ini](platformio.ini).
+
+## Build and upload
+
+PlatformIO commands:
+
+```bash
+platformio run
+platformio run --target upload
+platformio device monitor
 ```
 
-## Contact
+## Notes
 
-Feedback: max.savin3@gmail.com
+- The DS1307 must contain valid date/time data.
+- If the displayed time is wrong, the RTC likely needs to be set first.
+- If the OLED output looks incorrect, verify wiring, I2C address, and display rotation settings.
