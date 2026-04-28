@@ -47,12 +47,12 @@ void setup() {
 
 
 void loop() {
-    /* if (!rtc.readDateTime(dateTime)) {
+     if (!rtc.readDateTime(dateTime)) {
         Serial.println("RTC read error");
         display.showError("RTC read error");
         delay(1000);
         return;
-    } */
+    }
 
     Serial.printf("%02u:%02u:%02u\n", dateTime.hour, dateTime.minute, dateTime.second);
     Serial.printf(
