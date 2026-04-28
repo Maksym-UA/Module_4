@@ -3,6 +3,7 @@
 #include <Arduino.h>
 #include <Wire.h>
 #include <U8g2lib.h>
+#include <cstring>
 
 #include "DS1307clock.hpp"
 #include "BME280.hpp"
@@ -35,16 +36,28 @@ public:
     }
 
     void showRtcFallbackTime(const char* dateTimeText) {
+        char timeText[9] = "--:--:--";
+        if (dateTimeText != nullptr && strlen(dateTimeText) >= 19) {
+            snprintf(timeText, sizeof(timeText), "%s", dateTimeText + 11);
+        }
+
         u8g2_.clearBuffer();
         u8g2_.setFont(u8g2_font_6x12_tr);
-        u8g2_.drawStr(2, 18, "RTC unavailable");
-        u8g2_.drawStr(2, 34, "System time:");
-        u8g2_.drawStr(2, 50, dateTimeText);
+        u8g2_.drawStr(2, 12, "RTC unavailable");
+        u8g2_.setFont(u8g2_font_logisoso20_tn);
+        u8g2_.drawStr(2, 42, timeText);
+        u8g2_.setFont(u8g2_font_6x12_tr);
+        u8g2_.drawStr(2, 56, "System time");
         u8g2_.sendBuffer();
     }
 
     void showRtcFallbackTime(const char* dateTimeText, const bme280_app::BME280Data& bmeData) {
         char bmeText[24];
+        char timeText[9] = "--:--:--";
+
+        if (dateTimeText != nullptr && strlen(dateTimeText) >= 19) {
+            snprintf(timeText, sizeof(timeText), "%s", dateTimeText + 11);
+        }
 
         snprintf(
             bmeText,
@@ -57,8 +70,10 @@ public:
         u8g2_.clearBuffer();
         u8g2_.setFont(u8g2_font_6x12_tr);
         u8g2_.drawStr(2, 12, "RTC unavailable");
-        u8g2_.drawStr(2, 28, dateTimeText);
-        u8g2_.drawStr(2, 44, bmeText);
+        u8g2_.setFont(u8g2_font_logisoso20_tn);
+        u8g2_.drawStr(2, 42, timeText);
+        u8g2_.setFont(u8g2_font_6x12_tr);
+        u8g2_.drawStr(2, 56, bmeText);
         u8g2_.sendBuffer();
     }
 

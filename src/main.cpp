@@ -23,6 +23,7 @@ constexpr uint8_t kI2cSclPin = 9;
 constexpr uint16_t kStartupMessageMs = 2000;
 constexpr uint16_t kLoopIntervalMs = 1000;
 constexpr uint16_t kRtcErrorDisplayMs = 2000;
+constexpr int32_t kUtcOffsetSeconds = 3 * 3600;
 }  // namespace
 
 clock_app::DS1307clock rtc;
@@ -32,6 +33,17 @@ bme280_app::BME280 bme280;
 scanner_app::I2CScanResult i2cScanResult;
 bool rtcErrorActive = false;
 unsigned long rtcErrorStartedAtMs = 0;
+bool rtcPresent = true;
+
+bool isDeviceFound(const scanner_app::I2CScanResult& scanResult, uint8_t address) {
+    for (uint8_t i = 0; i < scanResult.count; ++i) {
+        if (scanResult.addresses[i] == address) {
+            return true;
+        }
+    }
+
+    return false;
+}
 
 
 void setup() {
@@ -47,6 +59,12 @@ void setup() {
     delay(kStartupMessageMs);
 
     scanner_app::scanI2CDevices(Wire, Serial, i2cScanResult);
+    rtcPresent = isDeviceFound(i2cScanResult, clock_app::DS1307clock::kAddress);
+    if (!rtcPresent) {
+        Serial.println("RTC not connected, fallback mode enabled");
+    }
+
+
     rtc.initSystemTimeFromBuild();
 
     Serial.println("System initialized!");
@@ -54,12 +72,12 @@ void setup() {
 
 
 void loop() {
-    const bool rtcOk = rtc.readDateTime(dateTime);
+    const bool rtcOk = rtcPresent && rtc.readDateTime(dateTime);
     if (!rtcOk) {
         if (!rtcErrorActive) {
             rtcErrorActive = true;
             rtcErrorStartedAtMs = millis();
-            Serial.println("RTC read error");
+            Serial.println(rtcPresent ? "RTC read error" : "RTC not connected");
         }
 
         const unsigned long errorDurationMs = millis() - rtcErrorStartedAtMs;

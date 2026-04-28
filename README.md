@@ -1,4 +1,4 @@
-# Module 4
+# Module 4.4
 
 Arduino/PlatformIO project for reading date/time from a **DS1307 RTC** and environment data from a **BME280** sensor over **I2C**, displaying everything on an **SSD1306 128x64 OLED**.
 

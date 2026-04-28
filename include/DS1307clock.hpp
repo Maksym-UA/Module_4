@@ -112,6 +112,7 @@ public:
         return 0;
     }
 
+
     void initSystemTimeFromBuild() const {
         struct tm buildTm = {};
         char monthText[4] = {0};
@@ -136,6 +137,9 @@ public:
             return;
         }
 
+        fallbackBaseEpoch_ = buildEpoch;
+        fallbackBaseMillis_ = millis();
+
         const struct timeval tv = {.tv_sec = buildEpoch, .tv_usec = 0};
         settimeofday(&tv, nullptr);
     }
@@ -146,16 +150,28 @@ public:
         }
 
         time_t now = time(NULL);
+        if (now < kMinValidEpoch && fallbackBaseEpoch_ >= kMinValidEpoch) {
+            const unsigned long elapsedSeconds = (millis() - fallbackBaseMillis_) / 1000UL;
+            now = fallbackBaseEpoch_ + static_cast<time_t>(elapsedSeconds);
+        }
+
         if (now < kMinValidEpoch) {
             snprintf(buffer, len, "TIME NOT SET");
             return;
         }
+
+        now += utcOffsetSeconds_;
 
         struct tm timeinfo;
         localtime_r(&now, &timeinfo);
         // Format: YYYY-MM-DD HH:MM:SS
         strftime(buffer, len, "%Y-%m-%d %H:%M:%S", &timeinfo);
     }
+
+private:
+    mutable time_t fallbackBaseEpoch_ = 0;
+    mutable unsigned long fallbackBaseMillis_ = 0;
+    int32_t utcOffsetSeconds_ = 0;
 };
 
 }
