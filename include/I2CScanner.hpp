@@ -37,4 +37,4 @@ inline void scanI2CDevices(TwoWire& wire, Stream& serial, I2CScanResult& result)
     }
 }
 
-} // namespace scanner_app
+}

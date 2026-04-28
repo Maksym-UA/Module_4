@@ -50,4 +50,4 @@ private:
     bool initialized_ = false;
 };
 
-} // namespace bme280_app
+}

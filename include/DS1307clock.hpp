@@ -2,6 +2,9 @@
 
 #include <Arduino.h>
 #include <Wire.h>
+#include <time.h>
+#include <sys/time.h>
+#include <cstring>
 
 namespace clock_app {
 
@@ -18,6 +21,7 @@ struct DateTime {
 class DS1307clock {
 public:
     static constexpr uint8_t kAddress = 0x68;
+    static constexpr time_t kMinValidEpoch = 946684800; // 2000-01-01 00:00:00 UTC
 
     static uint8_t bcdToDec(uint8_t bcd) {
         return static_cast<uint8_t>(((bcd >> 4) * 10) + (bcd & 0x0F));
@@ -93,6 +97,65 @@ public:
 
         return true;
     }
+
+    static int monthFromAbbrev(const char* month) {
+        static const char* kMonths[] = {
+            "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+            "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
+
+        for (int i = 0; i < 12; ++i) {
+            if (strcmp(month, kMonths[i]) == 0) {
+                return i;
+            }
+        }
+
+        return 0;
+    }
+
+    void initSystemTimeFromBuild() const {
+        struct tm buildTm = {};
+        char monthText[4] = {0};
+        int day = 1;
+        int year = 1970;
+        int hour = 0;
+        int minute = 0;
+        int second = 0;
+
+        sscanf(__DATE__, "%3s %d %d", monthText, &day, &year);
+        sscanf(__TIME__, "%d:%d:%d", &hour, &minute, &second);
+
+        buildTm.tm_year = year - 1900;
+        buildTm.tm_mon = monthFromAbbrev(monthText);
+        buildTm.tm_mday = day;
+        buildTm.tm_hour = hour;
+        buildTm.tm_min = minute;
+        buildTm.tm_sec = second;
+
+        const time_t buildEpoch = mktime(&buildTm);
+        if (buildEpoch <= 0) {
+            return;
+        }
+
+        const struct timeval tv = {.tv_sec = buildEpoch, .tv_usec = 0};
+        settimeofday(&tv, nullptr);
+    }
+
+    void get_datetime(char* buffer, size_t len) const {
+        if (buffer == nullptr || len == 0) {
+            return;
+        }
+
+        time_t now = time(NULL);
+        if (now < kMinValidEpoch) {
+            snprintf(buffer, len, "TIME NOT SET");
+            return;
+        }
+
+        struct tm timeinfo;
+        localtime_r(&now, &timeinfo);
+        // Format: YYYY-MM-DD HH:MM:SS
+        strftime(buffer, len, "%Y-%m-%d %H:%M:%S", &timeinfo);
+    }
 };
 
-} // namespace clock_app
+}

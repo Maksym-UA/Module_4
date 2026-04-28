@@ -34,6 +34,34 @@ public:
         u8g2_.sendBuffer();
     }
 
+    void showRtcFallbackTime(const char* dateTimeText) {
+        u8g2_.clearBuffer();
+        u8g2_.setFont(u8g2_font_6x12_tr);
+        u8g2_.drawStr(2, 18, "RTC unavailable");
+        u8g2_.drawStr(2, 34, "System time:");
+        u8g2_.drawStr(2, 50, dateTimeText);
+        u8g2_.sendBuffer();
+    }
+
+    void showRtcFallbackTime(const char* dateTimeText, const bme280_app::BME280Data& bmeData) {
+        char bmeText[24];
+
+        snprintf(
+            bmeText,
+            sizeof(bmeText),
+            "T:%.1fC H:%.0f%% P:%.0fhPa",
+            bmeData.temperatureC,
+            bmeData.humidityPercent,
+            bmeData.pressureHpa);
+
+        u8g2_.clearBuffer();
+        u8g2_.setFont(u8g2_font_6x12_tr);
+        u8g2_.drawStr(2, 12, "RTC unavailable");
+        u8g2_.drawStr(2, 28, dateTimeText);
+        u8g2_.drawStr(2, 44, bmeText);
+        u8g2_.sendBuffer();
+    }
+
     void showDateTime(const clock_app::DateTime& dateTime) {
         char timeText[9];
         char dateText[20];
@@ -108,4 +136,4 @@ private:
     U8G2_SSD1306_128X64_NONAME_F_HW_I2C u8g2_;
 };
 
-} // namespace oled_app
+}

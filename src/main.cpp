@@ -14,11 +14,15 @@
 #include "BME280.hpp"
 #include "I2CScanner.hpp"
 
+#include <time.h>
+#include <stdio.h>
+
 namespace {
 constexpr uint8_t kI2cSdaPin = 8;
 constexpr uint8_t kI2cSclPin = 9;
 constexpr uint16_t kStartupMessageMs = 2000;
 constexpr uint16_t kLoopIntervalMs = 1000;
+constexpr uint16_t kRtcErrorDisplayMs = 2000;
 }  // namespace
 
 clock_app::DS1307clock rtc;
@@ -26,6 +30,8 @@ clock_app::DateTime dateTime;
 oled_app::SSD1306Display display;
 bme280_app::BME280 bme280;
 scanner_app::I2CScanResult i2cScanResult;
+bool rtcErrorActive = false;
+unsigned long rtcErrorStartedAtMs = 0;
 
 
 void setup() {
@@ -41,38 +47,65 @@ void setup() {
     delay(kStartupMessageMs);
 
     scanner_app::scanI2CDevices(Wire, Serial, i2cScanResult);
+    rtc.initSystemTimeFromBuild();
 
     Serial.println("System initialized!");
 }
 
 
 void loop() {
-     if (!rtc.readDateTime(dateTime)) {
-        Serial.println("RTC read error");
-        display.showError("RTC read error");
-        delay(1000);
-        return;
-    }
+    const bool rtcOk = rtc.readDateTime(dateTime);
+    if (!rtcOk) {
+        if (!rtcErrorActive) {
+            rtcErrorActive = true;
+            rtcErrorStartedAtMs = millis();
+            Serial.println("RTC read error");
+        }
 
-    Serial.printf("%02u:%02u:%02u\n", dateTime.hour, dateTime.minute, dateTime.second);
-    Serial.printf(
-        "%s %02u.%02u.%04u\n",
-        clock_app::DS1307clock::dayToShortName(dateTime.dayOfWeek),
-        dateTime.dayOfMonth,
-        dateTime.month,
-        dateTime.year);
+        const unsigned long errorDurationMs = millis() - rtcErrorStartedAtMs;
+        if (errorDurationMs < kRtcErrorDisplayMs) {
+            display.showError("RTC read error");
+        } else {
+            char systemDateTime[20] = {0};
+            rtc.get_datetime(systemDateTime, sizeof(systemDateTime));
+            Serial.printf("System time fallback: %s\n", systemDateTime);
 
-    bme280_app::BME280Data bme280Data;
-    if (bme280.readData(bme280Data)) {
-        Serial.printf(
-            "T: %.1f C RH: %.1f%% P: %.1f hPa\n",
-            bme280Data.temperatureC,
-            bme280Data.humidityPercent,
-            bme280Data.pressureHpa);
-        display.showDateTime(dateTime, bme280Data);
+            bme280_app::BME280Data bme280Data;
+            if (bme280.readData(bme280Data)) {
+                Serial.printf(
+                    "T: %.1f C RH: %.1f%% P: %.1f hPa\n",
+                    bme280Data.temperatureC,
+                    bme280Data.humidityPercent,
+                    bme280Data.pressureHpa);
+                display.showRtcFallbackTime(systemDateTime, bme280Data);
+            } else {
+                Serial.println("BME280 read error");
+                display.showRtcFallbackTime(systemDateTime);
+            }
+        }
     } else {
-        Serial.println("BME280 read error");
-        display.showDateTime(dateTime);
+        rtcErrorActive = false;
+
+        Serial.printf("%02u:%02u:%02u\n", dateTime.hour, dateTime.minute, dateTime.second);
+        Serial.printf(
+            "%s %02u.%02u.%04u\n",
+            clock_app::DS1307clock::dayToShortName(dateTime.dayOfWeek),
+            dateTime.dayOfMonth,
+            dateTime.month,
+            dateTime.year);
+
+        bme280_app::BME280Data bme280Data;
+        if (bme280.readData(bme280Data)) {
+            Serial.printf(
+                "T: %.1f C RH: %.1f%% P: %.1f hPa\n",
+                bme280Data.temperatureC,
+                bme280Data.humidityPercent,
+                bme280Data.pressureHpa);
+            display.showDateTime(dateTime, bme280Data);
+        } else {
+            Serial.println("BME280 read error");
+            display.showDateTime(dateTime);
+        }
     }
 
     delay(kLoopIntervalMs);
