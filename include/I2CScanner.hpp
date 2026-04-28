@@ -3,7 +3,7 @@
 #include <Arduino.h>
 #include <Wire.h>
 
-namespace app {
+namespace scanner_app {
 
 constexpr uint8_t kMaxFoundDevices = 16;
 
@@ -37,4 +37,4 @@ inline void scanI2CDevices(TwoWire& wire, Stream& serial, I2CScanResult& result)
     }
 }
 
-} // namespace app
+} // namespace scanner_app

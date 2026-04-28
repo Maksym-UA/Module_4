@@ -1,0 +1,12 @@
+{
+	"folders": [
+		{
+			"path": "."
+		},
+		{
+			"name": "Module-2.6-ESP-IDF",
+			"path": "../../../Documents/PlatformIO/Projects/Module-2.6-ESP-IDF"
+		}
+	],
+	"settings": {}
+}

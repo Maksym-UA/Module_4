@@ -5,6 +5,7 @@
 #include <U8g2lib.h>
 
 #include "DS1307clock.hpp"
+#include "BME280.hpp"
 
 namespace oled_app {
 
@@ -59,6 +60,46 @@ public:
         u8g2_.drawStr(2, 12, dateText);
         u8g2_.setFont(u8g2_font_logisoso20_tn);
         u8g2_.drawStr(2, 50, timeText);
+        u8g2_.sendBuffer();
+    }
+
+    void showDateTime(const clock_app::DateTime& dateTime, const bme280_app::BME280Data& bmeData) {
+        char timeText[9];
+        char dateText[20];
+        char bmeText[24];
+
+        snprintf(
+            timeText,
+            sizeof(timeText),
+            "%02u:%02u:%02u",
+            dateTime.hour,
+            dateTime.minute,
+            dateTime.second);
+
+        snprintf(
+            dateText,
+            sizeof(dateText),
+            "%s %02u.%02u.%04u",
+            clock_app::DS1307clock::dayToShortName(dateTime.dayOfWeek),
+            dateTime.dayOfMonth,
+            dateTime.month,
+            dateTime.year);
+
+        snprintf(
+            bmeText,
+            sizeof(bmeText),
+            "T:%.1fC H:%.0f%% P:%.0fhPa",
+            bmeData.temperatureC,
+            bmeData.humidityPercent,
+            bmeData.pressureHpa);
+
+        u8g2_.clearBuffer();
+        u8g2_.setFont(u8g2_font_6x12_tr);
+        u8g2_.drawStr(2, 12, dateText);
+        u8g2_.setFont(u8g2_font_logisoso20_tn);
+        u8g2_.drawStr(2, 42, timeText);
+        u8g2_.setFont(u8g2_font_6x12_tr);
+        u8g2_.drawStr(2, 56, bmeText);
         u8g2_.sendBuffer();
     }
 
