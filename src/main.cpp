@@ -19,48 +19,48 @@
 
 
 namespace {
-constexpr uint8_t kI2cSdaPin = 8;
-constexpr uint8_t kI2cSclPin = 9;
-constexpr uint16_t kStartupMessageMs = 2000;
-constexpr uint16_t kLoopIntervalMs = 1000;
-constexpr uint16_t kRtcErrorDisplayMs = 2000;
-constexpr int32_t kUtcOffsetSeconds = 3 * 3600;
-constexpr unsigned long kRtcDataStaleMs = 30000UL; // 30 seconds, after which RTC fallback is considered stale and not used
-constexpr unsigned long kBmeDataStaleMs = 10000UL; // 10 seconds, after which BME280 fallback is considered stale and not used
+    constexpr uint8_t kI2cSdaPin = 8;
+    constexpr uint8_t kI2cSclPin = 9;
+    constexpr uint16_t kStartupMessageMs = 2000;
+    constexpr uint16_t kLoopIntervalMs = 1000;
+    constexpr uint16_t kRtcErrorDisplayMs = 2000;
+    constexpr int32_t kUtcOffsetSeconds = 3 * 3600;
+    constexpr unsigned long kRtcDataStaleMs = 30000UL; // 30 seconds, after which RTC fallback is considered stale and not used
+    constexpr unsigned long kBmeDataStaleMs = 10000UL; // 10 seconds, after which BME280 fallback is considered stale and not used
 
-struct LastKnownGoodData {
-    clock_app::DateTime rtc = {};
-    unsigned long rtcUpdatedAtMs = 0;
-    bool hasRtc = false;
+    struct LastKnownGoodData {
+        clock_app::DateTime rtc = {};
+        unsigned long rtcUpdatedAtMs = 0;
+        bool hasRtc = false;
 
-    bme280_app::BME280Data bme = {};
-    unsigned long bmeUpdatedAtMs = 0;
-    bool hasBme = false;
-};
+        bme280_app::BME280Data bme = {};
+        unsigned long bmeUpdatedAtMs = 0;
+        bool hasBme = false;
+    };
 
-bool isRtcDataValid(const clock_app::DateTime& value) {
-    return value.second <= 59U && value.minute <= 59U && value.hour <= 23U
-        && value.dayOfWeek >= 1U && value.dayOfWeek <= 7U
-        && value.dayOfMonth >= 1U && value.dayOfMonth <= 31U
-        && value.month >= 1U && value.month <= 12U
-        && value.year >= 2000U;
-}
+    bool isRtcDataValid(const clock_app::DateTime& value) {
+        return value.second <= 59U && value.minute <= 59U && value.hour <= 23U
+            && value.dayOfWeek >= 1U && value.dayOfWeek <= 7U
+            && value.dayOfMonth >= 1U && value.dayOfMonth <= 31U
+            && value.month >= 1U && value.month <= 12U
+            && value.year >= 2000U;
+    }
 
-bool isBmeDataValid(const bme280_app::BME280Data& value) {
-    return std::isfinite(value.temperatureC)
-        && std::isfinite(value.humidityPercent)
-        && std::isfinite(value.pressureHpa)
-        && value.temperatureC >= -40.0F
-        && value.temperatureC <= 85.0F
-        && value.humidityPercent >= 0.0F
-        && value.humidityPercent <= 100.0F
-        && value.pressureHpa >= 300.0F
-        && value.pressureHpa <= 1100.0F;
-}
+    bool isBmeDataValid(const bme280_app::BME280Data& value) {
+        return std::isfinite(value.temperatureC)
+            && std::isfinite(value.humidityPercent)
+            && std::isfinite(value.pressureHpa)
+            && value.temperatureC >= -40.0F
+            && value.temperatureC <= 85.0F
+            && value.humidityPercent >= 0.0F
+            && value.humidityPercent <= 100.0F
+            && value.pressureHpa >= 300.0F
+            && value.pressureHpa <= 1100.0F;
+    }
 
-bool isDataFresh(unsigned long updatedAtMs, unsigned long maxAgeMs, unsigned long nowMs) {
-    return (nowMs - updatedAtMs) <= maxAgeMs;
-}
+    bool isDataFresh(unsigned long updatedAtMs, unsigned long maxAgeMs, unsigned long nowMs) {
+        return (nowMs - updatedAtMs) <= maxAgeMs;
+    }
 }  // namespace
 
 clock_app::DS1307clock rtc;
@@ -79,7 +79,6 @@ bool isDeviceFound(const scanner_app::I2CScanResult& scanResult, uint8_t address
             return true;
         }
     }
-
     return false;
 }
 
@@ -98,10 +97,10 @@ void setup() {
 
     scanner_app::scanI2CDevices(Wire, Serial, i2cScanResult);
     rtcPresent = isDeviceFound(i2cScanResult, clock_app::DS1307clock::kAddress);
+
     if (!rtcPresent) {
         Serial.println("RTC not connected, fallback mode enabled");
     }
-
 
     rtc.initSystemTimeFromBuild();
 
@@ -114,12 +113,15 @@ void loop() {
 
     const bool rtcReadOk = rtcPresent && rtc.readDateTime(dateTime);
     const bool rtcOk = rtcReadOk && isRtcDataValid(dateTime);
+
     if (rtcOk) {
         lastKnownGood.rtc = dateTime;
         lastKnownGood.rtcUpdatedAtMs = nowMs;
         lastKnownGood.hasRtc = true;
     }
 
+    // Even if RTC read is successful, the data might be invalid (e.g. due to RTC battery failure),
+    // so we check validity separately and only log valid data.
     bme280_app::BME280Data currentBmeData;
     const bool bmeReadOk = bme280.readData(currentBmeData);
     const bool bmeOk = bmeReadOk && isBmeDataValid(currentBmeData);

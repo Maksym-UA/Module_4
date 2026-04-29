@@ -181,5 +181,4 @@ namespace clock_app {
         mutable unsigned long fallbackBaseMillis_ = 0;
         int32_t utcOffsetSeconds_ = 0;
     };
-
 }

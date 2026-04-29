@@ -49,5 +49,4 @@ namespace bme280_app {
         mutable Adafruit_BME280 sensor_;
         bool initialized_ = false;
     };
-
 }
