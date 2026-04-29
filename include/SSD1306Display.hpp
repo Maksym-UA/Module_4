@@ -19,6 +19,7 @@ namespace oled_app {
         void begin() {
             u8g2_.begin();
             u8g2_.enableUTF8Print();
+            // The U8g2 library expects the 7-bit I2C address to be left-shifted by 1
             u8g2_.setI2CAddress(OLED_ADDR << 1);
             u8g2_.setBusClock(100000);
         }

@@ -28,6 +28,7 @@ namespace {
     constexpr unsigned long kRtcDataStaleMs = 30000UL; // 30 seconds, after which RTC fallback is considered stale and not used
     constexpr unsigned long kBmeDataStaleMs = 10000UL; // 10 seconds, after which BME280 fallback is considered stale and not used
 
+    // Struct to hold the last known good RTC and BME280 data along with their update timestamps.
     struct LastKnownGoodData {
         clock_app::DateTime rtc = {};
         unsigned long rtcUpdatedAtMs = 0;
@@ -63,6 +64,7 @@ namespace {
     }
 }  // namespace
 
+
 clock_app::DS1307clock rtc;
 clock_app::DateTime dateTime;
 oled_app::SSD1306Display display;
@@ -72,6 +74,7 @@ bool rtcErrorActive = false;
 unsigned long rtcErrorStartedAtMs = 0;
 bool rtcPresent = true;
 LastKnownGoodData lastKnownGood;
+
 
 bool isDeviceFound(const scanner_app::I2CScanResult& scanResult, uint8_t address) {
     for (uint8_t i = 0; i < scanResult.count; ++i) {
