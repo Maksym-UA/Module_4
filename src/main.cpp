@@ -8,14 +8,15 @@
 
 #include <Arduino.h>
 #include <Wire.h>
+#include <time.h>
+#include <stdio.h>
+#include <cmath>
 
 #include "DS1307clock.hpp"
 #include "SSD1306Display.hpp"
 #include "BME280.hpp"
 #include "I2CScanner.hpp"
 
-#include <time.h>
-#include <stdio.h>
 
 namespace {
 constexpr uint8_t kI2cSdaPin = 8;
@@ -24,6 +25,42 @@ constexpr uint16_t kStartupMessageMs = 2000;
 constexpr uint16_t kLoopIntervalMs = 1000;
 constexpr uint16_t kRtcErrorDisplayMs = 2000;
 constexpr int32_t kUtcOffsetSeconds = 3 * 3600;
+constexpr unsigned long kRtcDataStaleMs = 30000UL; // 30 seconds, after which RTC fallback is considered stale and not used
+constexpr unsigned long kBmeDataStaleMs = 10000UL; // 10 seconds, after which BME280 fallback is considered stale and not used
+
+struct LastKnownGoodData {
+    clock_app::DateTime rtc = {};
+    unsigned long rtcUpdatedAtMs = 0;
+    bool hasRtc = false;
+
+    bme280_app::BME280Data bme = {};
+    unsigned long bmeUpdatedAtMs = 0;
+    bool hasBme = false;
+};
+
+bool isRtcDataValid(const clock_app::DateTime& value) {
+    return value.second <= 59U && value.minute <= 59U && value.hour <= 23U
+        && value.dayOfWeek >= 1U && value.dayOfWeek <= 7U
+        && value.dayOfMonth >= 1U && value.dayOfMonth <= 31U
+        && value.month >= 1U && value.month <= 12U
+        && value.year >= 2000U;
+}
+
+bool isBmeDataValid(const bme280_app::BME280Data& value) {
+    return std::isfinite(value.temperatureC)
+        && std::isfinite(value.humidityPercent)
+        && std::isfinite(value.pressureHpa)
+        && value.temperatureC >= -40.0F
+        && value.temperatureC <= 85.0F
+        && value.humidityPercent >= 0.0F
+        && value.humidityPercent <= 100.0F
+        && value.pressureHpa >= 300.0F
+        && value.pressureHpa <= 1100.0F;
+}
+
+bool isDataFresh(unsigned long updatedAtMs, unsigned long maxAgeMs, unsigned long nowMs) {
+    return (nowMs - updatedAtMs) <= maxAgeMs;
+}
 }  // namespace
 
 clock_app::DS1307clock rtc;
@@ -34,6 +71,7 @@ scanner_app::I2CScanResult i2cScanResult;
 bool rtcErrorActive = false;
 unsigned long rtcErrorStartedAtMs = 0;
 bool rtcPresent = true;
+LastKnownGoodData lastKnownGood;
 
 bool isDeviceFound(const scanner_app::I2CScanResult& scanResult, uint8_t address) {
     for (uint8_t i = 0; i < scanResult.count; ++i) {
@@ -72,33 +110,70 @@ void setup() {
 
 
 void loop() {
-    const bool rtcOk = rtcPresent && rtc.readDateTime(dateTime);
+    const unsigned long nowMs = millis();
+
+    const bool rtcReadOk = rtcPresent && rtc.readDateTime(dateTime);
+    const bool rtcOk = rtcReadOk && isRtcDataValid(dateTime);
+    if (rtcOk) {
+        lastKnownGood.rtc = dateTime;
+        lastKnownGood.rtcUpdatedAtMs = nowMs;
+        lastKnownGood.hasRtc = true;
+    }
+
+    bme280_app::BME280Data currentBmeData;
+    const bool bmeReadOk = bme280.readData(currentBmeData);
+    const bool bmeOk = bmeReadOk && isBmeDataValid(currentBmeData);
+    if (bmeOk) {
+        lastKnownGood.bme = currentBmeData;
+        lastKnownGood.bmeUpdatedAtMs = nowMs;
+        lastKnownGood.hasBme = true;
+    }
+
+    const bool bmeFallbackFresh = lastKnownGood.hasBme
+        && isDataFresh(lastKnownGood.bmeUpdatedAtMs, kBmeDataStaleMs, nowMs);
+    const bme280_app::BME280Data* bmeToDisplay = bmeFallbackFresh ? &lastKnownGood.bme : nullptr;
+
     if (!rtcOk) {
         if (!rtcErrorActive) {
             rtcErrorActive = true;
             rtcErrorStartedAtMs = millis();
-            Serial.println(rtcPresent ? "RTC read error" : "RTC not connected");
+            Serial.println(rtcPresent ? "RTC read/validation error" : "RTC not connected");
         }
 
         const unsigned long errorDurationMs = millis() - rtcErrorStartedAtMs;
         if (errorDurationMs < kRtcErrorDisplayMs) {
             display.showError("RTC read error");
         } else {
-            char systemDateTime[20] = {0};
-            rtc.get_datetime(systemDateTime, sizeof(systemDateTime));
-            Serial.printf("System time fallback: %s\n", systemDateTime);
+            const bool rtcFallbackFresh = lastKnownGood.hasRtc
+                && isDataFresh(lastKnownGood.rtcUpdatedAtMs, kRtcDataStaleMs, nowMs);
 
-            bme280_app::BME280Data bme280Data;
-            if (bme280.readData(bme280Data)) {
-                Serial.printf(
-                    "T: %.1f C RH: %.1f%% P: %.1f hPa\n",
-                    bme280Data.temperatureC,
-                    bme280Data.humidityPercent,
-                    bme280Data.pressureHpa);
-                display.showRtcFallbackTime(systemDateTime, bme280Data);
+            if (rtcFallbackFresh) {
+                Serial.println("RTC fallback: using last known good RTC value");
+                if (bmeToDisplay != nullptr) {
+                    Serial.printf(
+                        "T: %.1f C RH: %.1f%% P: %.1f hPa\n",
+                        bmeToDisplay->temperatureC,
+                        bmeToDisplay->humidityPercent,
+                        bmeToDisplay->pressureHpa);
+                } else {
+                    Serial.println("BME280 fallback unavailable or stale");
+                }
+                display.showDateTime(lastKnownGood.rtc, bmeToDisplay);
             } else {
-                Serial.println("BME280 read error");
-                display.showRtcFallbackTime(systemDateTime);
+                char systemDateTime[20] = {0};
+                rtc.get_datetime(systemDateTime, sizeof(systemDateTime));
+                Serial.printf("System time fallback: %s\n", systemDateTime);
+
+                if (bmeToDisplay != nullptr) {
+                    Serial.printf(
+                        "T: %.1f C RH: %.1f%% P: %.1f hPa\n",
+                        bmeToDisplay->temperatureC,
+                        bmeToDisplay->humidityPercent,
+                        bmeToDisplay->pressureHpa);
+                } else {
+                    Serial.println("BME280 fallback unavailable or stale");
+                }
+                display.showRtcFallbackTime(systemDateTime, bmeToDisplay);
             }
         }
     } else {
@@ -112,16 +187,15 @@ void loop() {
             dateTime.month,
             dateTime.year);
 
-        bme280_app::BME280Data bme280Data;
-        if (bme280.readData(bme280Data)) {
+        if (bmeToDisplay != nullptr) {
             Serial.printf(
                 "T: %.1f C RH: %.1f%% P: %.1f hPa\n",
-                bme280Data.temperatureC,
-                bme280Data.humidityPercent,
-                bme280Data.pressureHpa);
-            display.showDateTime(dateTime, bme280Data);
+                bmeToDisplay->temperatureC,
+                bmeToDisplay->humidityPercent,
+                bmeToDisplay->pressureHpa);
+            display.showDateTime(dateTime, bmeToDisplay);
         } else {
-            Serial.println("BME280 read error");
+            Serial.println("BME280 read/validation error and no fresh fallback");
             display.showDateTime(dateTime);
         }
     }
