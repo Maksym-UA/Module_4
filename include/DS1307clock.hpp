@@ -51,13 +51,14 @@ namespace clock_app {
             return bcdToDec(hourBcd & 0x3FU);
         }
 
-        //Converts day of week number (1-7) to a short name string to fit on the display.
-        // Returns "???" for invalid values.
+
         static const char* dayToShortName(uint8_t dayOfWeek) {
             static const char* kDays[] = {"???", "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
             return (dayOfWeek >= 1U && dayOfWeek <= 7U) ? kDays[dayOfWeek] : "???";
         }
 
+        // Initializes the RTC and checks if it is running. If the RTC was halted, it will be restarted
+        // and the function will return false this once, but true on the next call.
         static bool isDateTimeInRange(const DateTime& dateTime) {
             return dateTime.second <= 59U && dateTime.minute <= 59U && dateTime.hour <= 23U
                 && dateTime.dayOfWeek >= 1U && dateTime.dayOfWeek <= 7U

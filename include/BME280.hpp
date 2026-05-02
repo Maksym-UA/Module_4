@@ -48,6 +48,7 @@ namespace bme280_app {
         CalibData calib_;
         mutable int32_t tFine_ = 0;
 
+        // Helper functions to read little-endian values from the calibration data.
         static uint16_t readU16LE(const uint8_t* data) {
             return static_cast<uint16_t>(data[0]) |
                    (static_cast<uint16_t>(data[1]) << 8);
@@ -105,6 +106,7 @@ namespace bme280_app {
                 return false;
             }
 
+            // Read a signed 16-bit value in little-endian byte order.
             calib_.dig_T1 = readU16LE(&calib1[0]);
             calib_.dig_T2 = readS16LE(&calib1[2]);
             calib_.dig_T3 = readS16LE(&calib1[4]);
