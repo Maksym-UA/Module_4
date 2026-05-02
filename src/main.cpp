@@ -1,16 +1,10 @@
-/*
-- Зчитувати з BME280: температуру (°C), вологість (%RH), тиск (hPa).
-- Додати до вже наявного виводу на екран (попереднє ДЗ) три нові поля: T, RH, P (наприклад: T: 23.4°C RH: 45% P: 1013 hPa).
-- Оновлювати дані з BME280 не рідше 1 разу на секунду (можна окремим таймером/міткою часу), без delay().
-- Дублювати всі значення показані на екрані через систему логування.
-*/
-
-
 #include <Arduino.h>
 #include <Wire.h>
 #include <time.h>
+#include <sys/time.h>
 #include <stdio.h>
 #include <cmath>
+#include <cstdlib>
 
 #include "DS1307clock.hpp"
 #include "SSD1306Display.hpp"
@@ -24,7 +18,8 @@ namespace {
     constexpr uint16_t kStartupMessageMs = 2000;
     constexpr uint16_t kLoopIntervalMs = 1000;
     constexpr uint16_t kRtcErrorDisplayMs = 2000;
-    constexpr int32_t kUtcOffsetSeconds = 3 * 3600;
+    constexpr uint8_t kRtcFailureThreshold = 3;
+    constexpr uint8_t kRtcReadRetries = 3;
     constexpr unsigned long kRtcDataStaleMs = 30000UL; // 30 seconds, after which RTC fallback is considered stale and not used
     constexpr unsigned long kBmeDataStaleMs = 10000UL; // 10 seconds, after which BME280 fallback is considered stale and not used
 
@@ -40,11 +35,53 @@ namespace {
     };
 
     bool isRtcDataValid(const clock_app::DateTime& value) {
-        return value.second <= 59U && value.minute <= 59U && value.hour <= 23U
-            && value.dayOfWeek >= 1U && value.dayOfWeek <= 7U
-            && value.dayOfMonth >= 1U && value.dayOfMonth <= 31U
-            && value.month >= 1U && value.month <= 12U
-            && value.year >= 2000U;
+        return clock_app::DS1307clock::isDateTimeInRange(value)
+            && !clock_app::DS1307clock::isResetDefaultDate(value);
+    }
+
+    time_t epochFromDateTime(const clock_app::DateTime& value) {
+        struct tm timeInfo = {};
+        timeInfo.tm_year = static_cast<int>(value.year) - 1900;
+        timeInfo.tm_mon = static_cast<int>(value.month) - 1;
+        timeInfo.tm_mday = static_cast<int>(value.dayOfMonth);
+        timeInfo.tm_hour = static_cast<int>(value.hour);
+        timeInfo.tm_min = static_cast<int>(value.minute);
+        timeInfo.tm_sec = static_cast<int>(value.second);
+        timeInfo.tm_isdst = -1;
+        return mktime(&timeInfo);
+    }
+
+    bool readRtcWithRetry(clock_app::DS1307clock& rtc, clock_app::DateTime& value) {
+        for (uint8_t attempt = 0; attempt < kRtcReadRetries; ++attempt) {
+            clock_app::DateTime candidate = {};
+            const bool readOk = rtc.readDateTime(candidate);
+            if (readOk && isRtcDataValid(candidate)) {
+                value = candidate;
+                return true;
+            }
+            delay(5);
+        }
+
+        return false;
+    }
+
+    void syncRtcOnBoot(clock_app::DS1307clock& rtc, bool rtcPresent) {
+        if (!rtcPresent) return;
+
+        // 1. Wait for power to stabilize
+        delay(500);
+
+        clock_app::DateTime rtcAtBoot = {};
+        if (readRtcWithRetry(rtc, rtcAtBoot)) {
+            // Success: Set the ESP32 system clock to the actual Hardware RTC time
+            const time_t rtcEpoch = epochFromDateTime(rtcAtBoot);
+            const struct timeval tv = {.tv_sec = rtcEpoch, .tv_usec = 0};
+            settimeofday(&tv, nullptr);
+            Serial.println("System clock synced to Hardware RTC.");
+        } else {
+            // Fail: The RTC is struggling. DO NOT overwrite it.
+            Serial.println("RTC read failed. Hardware time preserved (not overwritten).");
+        }
     }
 
     bool isBmeDataValid(const bme280_app::BME280Data& value) {
@@ -62,6 +99,47 @@ namespace {
     bool isDataFresh(unsigned long updatedAtMs, unsigned long maxAgeMs, unsigned long nowMs) {
         return (nowMs - updatedAtMs) <= maxAgeMs;
     }
+
+    void logBmeDataOrFallback(const bme280_app::BME280Data* bmeData) {
+        if (bmeData != nullptr) {
+            Serial.printf(
+                "T: %.1f C RH: %.1f%% P: %.1f hPa\n",
+                bmeData->temperatureC,
+                bmeData->humidityPercent,
+                bmeData->pressureHpa);
+        } else {
+            Serial.println("BME280 fallback unavailable or stale");
+        }
+    }
+
+    void showRtcFallbackTime(
+        const clock_app::DS1307clock& rtc,
+        const LastKnownGoodData& lastKnownGood,
+        unsigned long nowMs,
+        oled_app::SSD1306Display& display,
+        const bme280_app::BME280Data* bmeToDisplay,
+        bool withSerialLogging) {
+
+        const bool rtcFallbackFresh = lastKnownGood.hasRtc
+            && isDataFresh(lastKnownGood.rtcUpdatedAtMs, kRtcDataStaleMs, nowMs);
+
+        if (rtcFallbackFresh) {
+            if (withSerialLogging) {
+                Serial.println("RTC fallback: using last known good RTC value");
+                logBmeDataOrFallback(bmeToDisplay);
+            }
+            display.showDateTime(lastKnownGood.rtc, bmeToDisplay);
+            return;
+        }
+
+        char systemDateTime[20] = {0};
+        rtc.get_datetime(systemDateTime, sizeof(systemDateTime));
+        if (withSerialLogging) {
+            Serial.printf("System time fallback: %s\n", systemDateTime);
+            logBmeDataOrFallback(bmeToDisplay);
+        }
+        display.showRtcFallbackTime(systemDateTime, bmeToDisplay);
+    }
 }  // namespace
 
 
@@ -72,6 +150,7 @@ bme280_app::BME280 bme280;
 scanner_app::I2CScanResult i2cScanResult;
 bool rtcErrorActive = false;
 unsigned long rtcErrorStartedAtMs = 0;
+uint8_t rtcConsecutiveFailures = 0;
 bool rtcPresent = true;
 LastKnownGoodData lastKnownGood;
 
@@ -103,9 +182,10 @@ void setup() {
 
     if (!rtcPresent) {
         Serial.println("RTC not connected, fallback mode enabled");
+        rtc.initSystemTimeFromBuild();
     }
 
-    rtc.initSystemTimeFromBuild();
+    syncRtcOnBoot(rtc, rtcPresent);
 
     Serial.println("System initialized!");
 }
@@ -114,13 +194,15 @@ void setup() {
 void loop() {
     const unsigned long nowMs = millis();
 
-    const bool rtcReadOk = rtcPresent && rtc.readDateTime(dateTime);
-    const bool rtcOk = rtcReadOk && isRtcDataValid(dateTime);
+    const bool rtcOk = rtcPresent && readRtcWithRetry(rtc, dateTime);
 
     if (rtcOk) {
+        rtcConsecutiveFailures = 0;
         lastKnownGood.rtc = dateTime;
         lastKnownGood.rtcUpdatedAtMs = nowMs;
         lastKnownGood.hasRtc = true;
+    } else if (rtcConsecutiveFailures < 255U) {
+        ++rtcConsecutiveFailures;
     }
 
     // Even if RTC read is successful, the data might be invalid (e.g. due to RTC battery failure),
@@ -138,7 +220,9 @@ void loop() {
         && isDataFresh(lastKnownGood.bmeUpdatedAtMs, kBmeDataStaleMs, nowMs);
     const bme280_app::BME280Data* bmeToDisplay = bmeFallbackFresh ? &lastKnownGood.bme : nullptr;
 
-    if (!rtcOk) {
+    const bool rtcFailurePersistent = rtcConsecutiveFailures >= kRtcFailureThreshold;
+
+    if (!rtcOk && rtcFailurePersistent) {
         if (!rtcErrorActive) {
             rtcErrorActive = true;
             rtcErrorStartedAtMs = millis();
@@ -149,38 +233,10 @@ void loop() {
         if (errorDurationMs < kRtcErrorDisplayMs) {
             display.showError("RTC read error");
         } else {
-            const bool rtcFallbackFresh = lastKnownGood.hasRtc
-                && isDataFresh(lastKnownGood.rtcUpdatedAtMs, kRtcDataStaleMs, nowMs);
-
-            if (rtcFallbackFresh) {
-                Serial.println("RTC fallback: using last known good RTC value");
-                if (bmeToDisplay != nullptr) {
-                    Serial.printf(
-                        "T: %.1f C RH: %.1f%% P: %.1f hPa\n",
-                        bmeToDisplay->temperatureC,
-                        bmeToDisplay->humidityPercent,
-                        bmeToDisplay->pressureHpa);
-                } else {
-                    Serial.println("BME280 fallback unavailable or stale");
-                }
-                display.showDateTime(lastKnownGood.rtc, bmeToDisplay);
-            } else {
-                char systemDateTime[20] = {0};
-                rtc.get_datetime(systemDateTime, sizeof(systemDateTime));
-                Serial.printf("System time fallback: %s\n", systemDateTime);
-
-                if (bmeToDisplay != nullptr) {
-                    Serial.printf(
-                        "T: %.1f C RH: %.1f%% P: %.1f hPa\n",
-                        bmeToDisplay->temperatureC,
-                        bmeToDisplay->humidityPercent,
-                        bmeToDisplay->pressureHpa);
-                } else {
-                    Serial.println("BME280 fallback unavailable or stale");
-                }
-                display.showRtcFallbackTime(systemDateTime, bmeToDisplay);
-            }
+            showRtcFallbackTime(rtc, lastKnownGood, nowMs, display, bmeToDisplay, true);
         }
+    } else if (!rtcOk) {
+        showRtcFallbackTime(rtc, lastKnownGood, nowMs, display, bmeToDisplay, false);
     } else {
         rtcErrorActive = false;
 

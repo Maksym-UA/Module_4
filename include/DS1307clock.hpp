@@ -6,6 +6,7 @@
 #include <sys/time.h>
 #include <cstring>
 
+
 namespace clock_app {
 
     struct DateTime {
@@ -24,9 +25,13 @@ namespace clock_app {
         static constexpr time_t kMinValidEpoch = 946684800;
         // 2000-01-01 00:00:00 UTC, a lower bound to reject invalid RTC dates
 
-        //convert one byte from BCD (Binary-Coded Decimal) format into a normal decimal value
+        // Converts one byte from BCD (Binary-Coded Decimal) format into decimal value.
         static uint8_t bcdToDec(uint8_t bcd) {
             return static_cast<uint8_t>(((bcd >> 4) * 10) + (bcd & 0x0F));
+        }
+
+        static uint8_t decToBcd(uint8_t dec) {
+            return static_cast<uint8_t>(((dec / 10U) << 4) | (dec % 10U));
         }
 
         static uint8_t decodeHour24(uint8_t hourBcd) {
@@ -46,9 +51,25 @@ namespace clock_app {
             return bcdToDec(hourBcd & 0x3FU);
         }
 
+        //Converts day of week number (1-7) to a short name string to fit on the display.
+        // Returns "???" for invalid values.
         static const char* dayToShortName(uint8_t dayOfWeek) {
             static const char* kDays[] = {"???", "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
             return (dayOfWeek >= 1U && dayOfWeek <= 7U) ? kDays[dayOfWeek] : "???";
+        }
+
+        static bool isDateTimeInRange(const DateTime& dateTime) {
+            return dateTime.second <= 59U && dateTime.minute <= 59U && dateTime.hour <= 23U
+                && dateTime.dayOfWeek >= 1U && dateTime.dayOfWeek <= 7U
+                && dateTime.dayOfMonth >= 1U && dateTime.dayOfMonth <= 31U
+                && dateTime.month >= 1U && dateTime.month <= 12U
+                && dateTime.year >= 2000U && dateTime.year <= 2099U;
+        }
+
+        static bool isResetDefaultDate(const DateTime& dateTime) {
+            return dateTime.year == 2000U
+                && dateTime.month == 1U
+                && dateTime.dayOfMonth == 1U;
         }
 
         bool readDateTime(DateTime& dateTime, TwoWire& wire = Wire) const {
@@ -62,47 +83,78 @@ namespace clock_app {
                 &dateTime.year,
                 wire);
         }
+
+
+        bool writeDateTime(const DateTime& dateTime, TwoWire& wire = Wire) const {
+            if (!isDateTimeInRange(dateTime)) {
+                return false;
+            }
+
+            wire.beginTransmission(kAddress);
+            wire.write(0x00);
+            wire.write(decToBcd(dateTime.second));
+            wire.write(decToBcd(dateTime.minute));
+            wire.write(decToBcd(dateTime.hour));
+            wire.write(decToBcd(dateTime.dayOfWeek));
+            wire.write(decToBcd(dateTime.dayOfMonth));
+            wire.write(decToBcd(dateTime.month));
+            wire.write(decToBcd(static_cast<uint8_t>(dateTime.year - 2000U)));
+
+            return wire.endTransmission() == 0;
+        }
+
         // Reads time and date from the RTC. Returns true if successful, false on error.
         bool readTime(uint8_t* hour, uint8_t* minute, uint8_t* second, uint8_t* day, uint8_t* date,
             uint8_t* month, uint16_t* year, TwoWire& wire = Wire) const {
+            if (hour == nullptr || minute == nullptr || second == nullptr || day == nullptr
+                || date == nullptr || month == nullptr || year == nullptr) {
+                return false;
+            }
 
-                if (hour == nullptr || minute == nullptr || second == nullptr || day == nullptr
-                    || date == nullptr || month == nullptr || year == nullptr) {
-                    return false;
-                }
+            uint8_t data[7] = {0};
 
-                uint8_t data[7] = {0};
+            wire.beginTransmission(kAddress);
+            wire.write(0x00);
+            if (wire.endTransmission(false) != 0) {
+                return false;
+            }
 
+            const uint8_t readCount = wire.requestFrom(kAddress, static_cast<uint8_t>(7));
+            if (readCount != 7 || wire.available() < 7) {
+                return false;
+            }
+
+            // Read the 7 bytes of time data from the RTC
+            data[0] = wire.read();
+            data[1] = wire.read();
+            data[2] = wire.read();
+            data[3] = wire.read();
+            data[4] = wire.read();
+            data[5] = wire.read();
+            data[6] = wire.read();
+
+            const bool clockHalted = (data[0] & 0x80U) != 0U;
+            if (clockHalted) {
+                // Start the clock by writing 0 to the seconds register
                 wire.beginTransmission(kAddress);
                 wire.write(0x00);
-                if (wire.endTransmission(false) != 0) {
-                    return false;
-                }
-
-                const uint8_t readCount = wire.requestFrom(kAddress, static_cast<uint8_t>(7));
-                if (readCount != 7 || wire.available() < 7) {
-                    return false;
-                }
-
-                // Read the 7 bytes of time data from the RTC
-                data[0] = wire.read();
-                data[1] = wire.read();
-                data[2] = wire.read();
-                data[3] = wire.read();
-                data[4] = wire.read();
-                data[5] = wire.read();
-                data[6] = wire.read();
-
-                *second = bcdToDec(data[0] & 0x7F);
-                *minute = bcdToDec(data[1] & 0x7F);
-                *hour = decodeHour24(data[2]);
-                *day = bcdToDec(data[3] & 0x07);
-                *date = bcdToDec(data[4] & 0x3F);
-                *month = bcdToDec(data[5] & 0x1F);
-                *year = static_cast<uint16_t>(2000U + bcdToDec(data[6]));
-
-                return true;
+                wire.write(data[0] & 0x7F); // Keep the seconds, clear the CH bit
+                wire.endTransmission();
+                Serial.println("RTC was halted - Restarting oscillator...");
+                // Optionally return false this once, it will work on the next loop
+                return false;
             }
+
+            *second = bcdToDec(data[0] & 0x7F);
+            *minute = bcdToDec(data[1] & 0x7F);
+            *hour = decodeHour24(data[2]);
+            *day = bcdToDec(data[3] & 0x07);
+            *date = bcdToDec(data[4] & 0x3F);
+            *month = bcdToDec(data[5] & 0x1F);
+            *year = static_cast<uint16_t>(2000U + bcdToDec(data[6]));
+
+            return true;
+        }
 
         static int monthFromAbbrev(const char* month) {
             static const char* kMonths[] = {
