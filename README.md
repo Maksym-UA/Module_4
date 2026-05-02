@@ -75,8 +75,6 @@ Libraries used:
 
 - `Wire`
 - `U8g2`
-- `Adafruit BME280 Library`
-- `Adafruit Unified Sensor`
 
 All dependencies are declared in [platformio.ini](platformio.ini).
 
