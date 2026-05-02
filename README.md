@@ -95,3 +95,26 @@ platformio device monitor
 - The DS1307 must contain valid date/time data before use; if time shows `00:00:00`, the RTC needs to be set.
 - If the OLED output looks incorrect, verify wiring, I2C address, and display rotation settings.
 - BME280 default I2C address is `0x76`; some modules use `0x77` — update `kDefaultAddress` in [include/BME280.hpp](include/BME280.hpp) if needed.
+
+## RTC Behavior
+
+### Time persistence
+
+The DS1307 is battery-backed and retains time across power cycles. Once initialized with correct time, the RTC will keep the battery-backed value even when the ESP32 is rebooted from an external power source (e.g., powerbank).
+
+### Boot sync
+
+On startup:
+- If RTC is detected and contains valid time, the ESP32 system clock is synced from the RTC.
+- If RTC is not detected or read fails, the system clock is initialized from the build timestamp as a fallback.
+- RTC writes are performed with **3 retry attempts** (5 ms delay between attempts) to reduce I2C glitches.
+
+### Time format
+
+- All displayed time is **raw RTC data** with no timezone offset applied.
+- Ensure your DS1307 module is set to local time (or desired timezone) before operation.
+- UTC offset is configurable via `setUtcOffsetSeconds()` if needed in the future.
+
+### Halted RTC recovery
+
+If the RTC oscillator becomes halted (CH bit set in register 0x00), the driver automatically restarts it on the next read attempt.
