@@ -1,118 +1,112 @@
-# Module 4.4
+# ESP32-S3 Servo Control via Rotary Encoder (ESP-IDF + PlatformIO)
 
-Arduino/PlatformIO project for reading date/time from a **DS1307 RTC** and environment data from a **BME280** sensor over **I2C**, displaying everything on an **SSD1306 128x64 OLED**.
-
-## Features
-
-- Reads full date and time from the DS1307
-- Converts RTC hour data to **24-hour format**
-- Reads temperature (°C), humidity (%RH), and pressure (hPa) from BME280
-- Shows time as `HH:MM:SS`, date as `EEE DD.MM.YYYY`, and sensor data on a single OLED screen
-- Duplicates all displayed values to Serial
-- Scans the I2C bus on startup and reports found devices
-- Uses helper headers to keep `main.cpp` clean
-- Uses `Wire.h` for I2C communication
-- Uses `U8g2lib.h` for OLED rendering
+Controls a servo motor with a rotary encoder. Turning the encoder moves the servo shaft, the button adjusts sensitivity or resets to center, and a buzzer sounds at angle limits.
 
 ## Hardware
 
-- ESP32-S3 board using Arduino framework
-- DS1307 RTC module
-- BME280 temperature/humidity/pressure sensor
-- SSD1306 128x64 OLED display
-- All devices share the same I2C bus
+| Component | Model / Notes |
+|---|---|
+| Board | ESP32-S3-DevKitC-1 (N16R8, 16 MB Flash, 8 MB OPI PSRAM) |
+| Rotary encoder | Quadrature encoder with push button (e.g. KY-040) |
+| Servo motor | Standard hobby servo, 0–180°, 50 Hz PWM signal |
+| Buzzer | Passive piezo buzzer |
 
-## I2C configuration
-
-Current pins used in [src/main.cpp](src/main.cpp):
-
-- SDA: `8`
-- SCL: `9`
-
-I2C device addresses:
-
-- DS1307 RTC: `0x68`
-- SSD1306 OLED: `0x3C`
-- BME280 sensor: `0x76`
-
-## Output format
-
-Serial output per loop iteration:
+## Wiring
 
 ```
-15:33:59
-Sat 28.04.2026
-T: 23.4 C RH: 45.0% P: 1013.2 hPa
+Encoder:
+  CLK (Channel A)  →  GPIO 5
+  DT  (Channel B)  →  GPIO 4
+  SW  (Button)     →  GPIO 6
+  VCC              →  3.3V
+  GND              →  GND
+
+Servo:
+  Signal           →  GPIO 18
+  VCC              →  5V (external supply recommended)
+  GND              →  GND (common with ESP32)
+
+Buzzer:
+  Signal           →  GPIO 17
+  GND              →  GND
 ```
 
-OLED layout (top to bottom):
+> **Note:** Channel A/B are intentionally swapped in firmware to match the physical encoder orientation — CW rotation increments the count, CCW decrements it.
 
+## Behavior
+
+| Action | Result |
+|---|---|
+| Rotate encoder CW | Servo moves toward 180° |
+| Rotate encoder CCW | Servo moves toward 0° |
+| Reach angle limit (0° or 180°) | Short buzzer beep |
+| Short button press | Servo step per tick halved (`scale × 0.5`) |
+| Long button press (≥ 1 s) | Step scale reset to `1.0`, servo returns to 90° |
+
+## Software requirements
+
+- VS Code
+- PlatformIO extension
+- ESP-IDF toolchain (installed automatically by PlatformIO)
+
+## Build and run
+
+Build:
+
+```bash
+pio run
 ```
-Sat 28.04.2026
-15:33:59          ← large font
-T:23.4C H:45% P:1013hPa
+
+Flash firmware:
+
+```bash
+pio run -t upload
 ```
+
+Open serial monitor (115200 baud):
+
+```bash
+pio device monitor -b 115200
+```
+
+## Configuration
+
+Key constants in `src/main.cpp`:
+
+| Constant | Default | Description |
+|---|---|---|
+| `SERVO_COUNTS_PER_DEGREE` | `2.0` | Encoder counts required per 1° of servo movement |
+| `SERVO_DIRECTION` | `-1.0` | Set to `1.0` to flip rotation direction |
+| `BUTTON_LONG_PRESS_MS` | `1000` | Long-press threshold in milliseconds |
+| `LIMIT_BEEP_COOLDOWN_MS` | `120` | Minimum time between buzzer beeps at limits |
+
+Servo pulse range (in `src/servo.cpp`):
+
+| Constant | Value | Description |
+|---|---|---|
+| `MIN_PULSE_US` | `500 µs` | Pulse width at 0° |
+| `MAX_PULSE_US` | `2500 µs` | Pulse width at 180° |
+| `SERVO_FREQ` | `50 Hz` | PWM frequency |
+| `SERVO_RESOLUTION` | 13-bit | Duty cycle resolution (8192 steps) |
+
+Platform settings (`platformio.ini`): framework `espidf`, flash mode `qio`, flash size `16MB`, monitor `115200` baud.
 
 ## Project structure
 
-- [src/main.cpp](src/main.cpp) — application entry point, setup, and main loop
-- [include/DS1307clock.hpp](include/DS1307clock.hpp) — RTC helper, `DateTime` structure, BCD conversion, 24-hour decoding, and weekday name lookup
-- [include/SSD1306Display.hpp](include/SSD1306Display.hpp) — OLED display helper for startup, error, date/time, and BME280 data rendering
-- [include/BME280.hpp](include/BME280.hpp) — BME280 sensor helper with `BME280Data` struct and I2C pin-aware init
-- [include/I2CScanner.hpp](include/I2CScanner.hpp) — I2C bus scanner, runs once on startup
-
-## How it works
-
-1. `setup()` initializes Serial, I2C (via `bme280.begin()`), OLED, and scans the I2C bus.
-2. `loop()` reads date/time from DS1307 and environment data from BME280 every second.
-3. All values are printed to Serial and rendered on the OLED simultaneously.
-4. If RTC read fails, an error is shown on the OLED and the loop retries after 1 s.
-5. If BME280 read fails, the OLED falls back to showing date/time only.
-
-## Dependencies
-
-Libraries used:
-
-- `Wire`
-- `U8g2`
-
-All dependencies are declared in [platformio.ini](platformio.ini).
-
-## Build and upload
-
-PlatformIO commands:
-
-```bash
-platformio run
-platformio run --target upload
-platformio device monitor
+```
+src/
+  main.cpp          # App entry point: control loop, button handling
+  servo.cpp         # LEDC PWM setup and angle control
+  encoder.cpp       # PCNT quadrature decoder, RPM, direction detection
+  buzzer.cpp        # LEDC buzzer setup and limit beep
+include/
+  servo.hpp
+  encoder.hpp
+  buzzer.hpp
+platformio.ini                    # Board and build settings
+sdkconfig.esp32-s3-devkitc-1     # ESP-IDF Kconfig options
 ```
 
-## Notes
+## Contact
 
-- The DS1307 must contain valid date/time data before use; if time shows `00:00:00`, the RTC needs to be set.
-- If the OLED output looks incorrect, verify wiring, I2C address, and display rotation settings.
-- BME280 default I2C address is `0x76`; some modules use `0x77` — update `kDefaultAddress` in [include/BME280.hpp](include/BME280.hpp) if needed.
-
-## RTC Behavior
-
-### Time persistence
-
-The DS1307 is battery-backed and retains time across power cycles. Once initialized with correct time, the RTC will keep the battery-backed value even when the ESP32 is rebooted from an external power source (e.g., powerbank).
-
-### Boot sync
-
-On startup:
-- If RTC is detected and contains valid time, the ESP32 system clock is synced from the RTC.
-- If RTC is not detected or read fails, the system clock is initialized from the build timestamp as a fallback.
-- RTC writes are performed with **3 retry attempts** (5 ms delay between attempts) to reduce I2C glitches.
-
-### Time format
-
-- All displayed time is **raw RTC data** with no timezone offset applied.
-- Ensure your DS1307 module is set to local time (or desired timezone) before operation.
-- UTC offset is configurable via `setUtcOffsetSeconds()` if needed in the future.
-
-### Halted RTC recovery
-
-If the RTC oscillator becomes halted (CH bit set in register 0x00), the driver automatically restarts it on the next read attempt.
+Feedback: max.savin3@gmail.com
