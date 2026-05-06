@@ -1,128 +1,89 @@
-#include <freertos/FreeRTOS.h>
-#include <freertos/task.h>
-#include <esp_timer.h>
-#include <esp_log.h>
-#include <esp_err.h>
-
-#include "buzzer.hpp"
-#include "encoder.hpp"
-#include "servo.hpp"
-
-
-const float SERVO_COUNTS_PER_DEGREE = 2.0f;
-const float SERVO_DIRECTION = -1.0f;
-const unsigned long BUTTON_LONG_PRESS_MS = 1000;
-const unsigned long LIMIT_BEEP_COOLDOWN_MS = 120;
-static const char *TAG = "app";
+#include <stdio.h>
+#include <string.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "driver/gpio.h"
+#include "esp_timer.h"
+#include "esp_async_memcpy.h"
+#include "esp_heap_caps.h"
+#include "esp_log.h"
 
 
-unsigned long get_millis() {
-    return (unsigned long)(esp_timer_get_time() / 1000);
+
+#define DATA_SIZE	(128 * 1024) // 128 KB
+
+static const char *TAG = "DMA_M2M_FLAG";
+
+// Структура для передачі даних у Callback
+typedef struct {
+    volatile bool is_done;         // Атомарний прапорець (32 біт)
+    volatile int64_t finish_time;  // Час завершення
+} dma_result_t;
+
+// Callback: виконується в контексті переривання (ISR)
+static bool IRAM_ATTR dma_copy_done_cb(async_memcpy_t mcp_hdl,
+                                        async_memcpy_event_t *event,
+                                        void *cb_args) {
+    dma_result_t *res = (dma_result_t *)cb_args;
+    res->finish_time = esp_timer_get_time(); // 1. Записуємо час
+    res->is_done = true;                     // 2. Піднімаємо прапорець (сигнал готовності)
+
+    return false;
 }
 
-
 extern "C" void app_main() {
-    Servo servo;
-    Buzzer buzzer;
-    QuadratureEncoder encoder;
 
-    // Initialize peripherals and handle errors
-    esp_err_t err = encoder.setup();
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "encoder.setup failed: %s", esp_err_to_name(err));
+    esp_err_t ret = ESP_OK;
+
+    async_memcpy_config_t config = {};
+    config.backlog = 8;
+    config.dma_burst_size = 16;
+    config.flags = 0;
+    async_memcpy_handle_t driver = NULL;
+    ret = esp_async_memcpy_install(&config, &driver);
+    ESP_ERROR_CHECK(ret);
+
+    // Підготовка пам'яті
+    uint8_t *src = (uint8_t *)heap_caps_malloc(DATA_SIZE, MALLOC_CAP_DMA);
+    uint8_t *dst = (uint8_t *)heap_caps_malloc(DATA_SIZE, MALLOC_CAP_DMA);
+    if (!src || !dst) {
+        ESP_LOGE(TAG, "Failed to allocate DMA-capable memory");
+        free(src);
+        free(dst);
+        esp_async_memcpy_uninstall(driver);
         return;
     }
 
-    err = servo.setup();
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "servo.setup failed: %s", esp_err_to_name(err));
-        return;
-    }
+    while (1) {
+        dma_result_t dma_res = { .is_done = false, .finish_time = 0 };
 
-    err = buzzer.setup();
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "buzzer.setup failed: %s", esp_err_to_name(err));
-        return;
-    }
+        ESP_LOGI(TAG, "--- Starting Test ---");
 
-    float current_servo_angle = Servo::kCenterAngle;
-    float servo_step_scale = 1.0f;
-    err = servo.setAngle(current_servo_angle);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "servo.setAngle(center) failed: %s", esp_err_to_name(err));
-        return;
-    }
-    int last_servo_count = encoder.getCount();
+        // --- ТЕСТ: memcpy ---
+        int64_t t1 = esp_timer_get_time();
+        memcpy(dst, src, DATA_SIZE);
+        int64_t memcpy_cpu_time = esp_timer_get_time() - t1;
 
-    bool last_btn = false;
-    bool long_press_handled = false;
-    unsigned long button_press_start = 0;
-    unsigned long last_limit_beep_time = 0;
+        // --- ТЕСТ: DMA ---
+        int64_t dma_start_call = esp_timer_get_time();
+        ret = esp_async_memcpy(driver, dst, src, DATA_SIZE, dma_copy_done_cb, &dma_res);
+        ESP_ERROR_CHECK(ret);
+        int64_t dma_cpu_block_time = esp_timer_get_time() - dma_start_call;
 
-
-    while (true) {
-        encoder.calculateRpm();
-        encoder.detectDirection();
-
-        int current_count = encoder.getCount();
-        int delta_count = current_count - last_servo_count;
-        if (delta_count != 0) {
-            float requested_servo_angle = current_servo_angle + (SERVO_DIRECTION * (((float)delta_count / SERVO_COUNTS_PER_DEGREE) * servo_step_scale));
-            float target_servo_angle = servo.clampAngle(requested_servo_angle);
-
-            if (target_servo_angle != requested_servo_angle) {
-                unsigned long now = get_millis();
-                if ((now - last_limit_beep_time) >= LIMIT_BEEP_COOLDOWN_MS) {
-                    err = buzzer.playLimitBeep();
-                    if (err != ESP_OK) {
-                        ESP_LOGE(TAG, "buzzer.playLimitBeep failed: %s", esp_err_to_name(err));
-                    }
-                    last_limit_beep_time = get_millis();
-                }
-            }
-
-            if (target_servo_angle != current_servo_angle) {
-                err = servo.setAngle(target_servo_angle);
-                if (err == ESP_OK) {
-                    current_servo_angle = target_servo_angle;
-                } else {
-                    ESP_LOGE(TAG, "servo.setAngle failed: %s", esp_err_to_name(err));
-                }
-            }
-            last_servo_count = current_count;
+        // Чекаємо на прапорець завершення DMA
+        while (!dma_res.is_done) {
+            esp_rom_delay_us(10);
         }
 
-        bool current_btn = encoder.isButtonPressed();
-        if (current_btn && !last_btn) {
-            button_press_start = get_millis();
-            long_press_handled = false;
-        }
+        ESP_LOGI(TAG, "1. memcpy (CPU busy):     %lld us", memcpy_cpu_time);
+        ESP_LOGI(TAG, "2. DMA call (CPU busy):   %lld us", dma_cpu_block_time);
+        ESP_LOGI(TAG, "Hardware copy time: %lld us", dma_res.finish_time - dma_start_call);
 
-        if (current_btn && !long_press_handled) {
-            unsigned long press_time = get_millis() - button_press_start;
-            if (press_time >= BUTTON_LONG_PRESS_MS) {
-                servo_step_scale = 1.0f;
-                err = encoder.reset();
-                if (err != ESP_OK) {
-                    ESP_LOGE(TAG, "encoder.reset failed: %s", esp_err_to_name(err));
-                }
-                current_servo_angle = Servo::kCenterAngle;
-                err = servo.setAngle(current_servo_angle);
-                if (err != ESP_OK) {
-                    ESP_LOGE(TAG, "servo.setAngle(center) failed: %s", esp_err_to_name(err));
-                }
-                last_servo_count = 0;
-                long_press_handled = true;
-            }
-        }
+        vTaskDelay(pdMS_TO_TICKS(2000));
 
-        if (!current_btn && last_btn) {
-            if (!long_press_handled) {
-                servo_step_scale *= 0.5f;
-            }
-        }
-        last_btn = current_btn;
-
-        vTaskDelay(pdMS_TO_TICKS(10));
     }
+
+    free(src);
+    free(dst);
+    esp_async_memcpy_uninstall(driver);
 }
