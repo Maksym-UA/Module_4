@@ -1,6 +1,6 @@
 # ESP32-S3 Universal logger project (ESP-IDF + PlatformIO)
 
-Fetching and saving logs from EEPROM AT24C32 of the **DS1307 RTC** clock:
+Fetching and saving logs from EEPROM AT24C32 of the RTC **DS1307** module:
 - initiation
 - errors
 - status.... etc
