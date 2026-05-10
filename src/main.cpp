@@ -1,132 +1,288 @@
+/* 5. Вимоги logger.cpp
+-  Ініціалізації логера
+-  Запис логу в пам'ть
+- Считування логу з пам'яті
+- Пошук останнього логу і сторінки пам'яті в який він записаний.
+
+6. Використання бібліотек
+- Бібліотека для роботи з EEPROM AT24C32
+
+7. Розмір і формат логів
+- Розмір одного лога: 32 байти
+- Текстовий формат з номером логу
+- Уся кількість логів, що зберігаються, залежить від розміру EEPROM (AT24C32 має 32 Кб, що дозволяє зберігати до 1024 логів по 32 байти кожен).
+- при заповненні всій пам'яті, починати запис поверх найстаршого логу - принцип ring buffer.
+
+8. Виведення логів в послідовний інтерфейс
+- по натисканню кнопки
+- порядок виведення з останного до початкового
+
+
+Приклад лога:
+"#156 Error: Failed to read memory\0" -> "#156 Error: Failed to read mem\0" */
+
+#include <Arduino.h>
+#include <Wire.h>
+#include <time.h>
+#include <sys/time.h>
 #include <stdio.h>
-#include <string.h>
-#include <inttypes.h>
-#include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
-#include "driver/uart.h"
-#include "driver/gpio.h"
-#include "esp_adc/adc_continuous.h"
-#include "esp_log.h"
-#include "esp_timer.h"
+#include <cmath>
+#include <cstdlib>
+
+#include "DS1307clock.hpp"
+#include "SSD1306Display.hpp"
+#include "BME280.hpp"
+#include "I2CScanner.hpp"
 
 
-#define UART_PORT               UART_NUM_0
-#define ADC_UNIT                ADC_UNIT_1
-#define ADC_CHAN                ADC_CHANNEL_0         // GPIO1 on ESP32-S3
-#define ADC_SAMPLE_RATE_HZ      20000                 // 20 kHz
-#define ADC_BUFFER_SIZE         256                   // Conversion frame size in bytes
-#define UART_BAUD_RATE          115200
-#define PRINT_INTERVAL_MS       1000                  // Print stats every 1 second
+namespace {
+    constexpr uint8_t kI2cSdaPin = 8;
+    constexpr uint8_t kI2cSclPin = 9;
+    constexpr uint16_t kStartupMessageMs = 2000;
+    constexpr uint16_t kLoopIntervalMs = 1000;
+    constexpr uint16_t kRtcErrorDisplayMs = 2000;
+    constexpr uint8_t kRtcFailureThreshold = 3;
+    constexpr uint8_t kRtcReadRetries = 3;
+    constexpr unsigned long kRtcDataStaleMs = 30000UL; // 30 seconds, after which RTC fallback is considered stale and not used
+    constexpr unsigned long kBmeDataStaleMs = 10000UL; // 10 seconds, after which BME280 fallback is considered stale and not used
 
-static const char *TAG = "ADC_DMA_UART";
+    // Struct to hold the last known good RTC and BME280 data along with their update timestamps.
+    struct LastKnownGoodData {
+        clock_app::DateTime rtc = {};
+        unsigned long rtcUpdatedAtMs = 0;
+        bool hasRtc = false;
 
-// ADC continuous handle
-adc_continuous_handle_t adc_handle = NULL;
+        bme280_app::BME280Data bme = {};
+        unsigned long bmeUpdatedAtMs = 0;
+        bool hasBme = false;
+    };
 
-// Callback function when ADC finishes filling a buffer with conversion result
-static bool IRAM_ATTR adc_on_conv_done(adc_continuous_handle_t handle,
-                                           const adc_continuous_evt_data_t *edata,
-                                           void *user_data) {
-    // Data is ready in internal buffer, will be read by main task
+    bool isRtcDataValid(const clock_app::DateTime& value) {
+        return clock_app::DS1307clock::isDateTimeInRange(value)
+            && !clock_app::DS1307clock::isResetDefaultDate(value);
+    }
+
+    time_t epochFromDateTime(const clock_app::DateTime& value) {
+        struct tm timeInfo = {};
+        timeInfo.tm_year = static_cast<int>(value.year) - 1900;
+        timeInfo.tm_mon = static_cast<int>(value.month) - 1;
+        timeInfo.tm_mday = static_cast<int>(value.dayOfMonth);
+        timeInfo.tm_hour = static_cast<int>(value.hour);
+        timeInfo.tm_min = static_cast<int>(value.minute);
+        timeInfo.tm_sec = static_cast<int>(value.second);
+        timeInfo.tm_isdst = -1;
+        return mktime(&timeInfo);
+    }
+
+    bool readRtcWithRetry(clock_app::DS1307clock& rtc, clock_app::DateTime& value) {
+        for (uint8_t attempt = 0; attempt < kRtcReadRetries; ++attempt) {
+            clock_app::DateTime candidate = {};
+            const bool readOk = rtc.readDateTime(candidate);
+            if (readOk && isRtcDataValid(candidate)) {
+                value = candidate;
+                return true;
+            }
+            delay(5);
+        }
+
+        return false;
+    }
+
+    void syncRtcOnBoot(clock_app::DS1307clock& rtc, bool rtcPresent) {
+        if (!rtcPresent) return;
+
+        // 1. Wait for power to stabilize
+        delay(500);
+
+        clock_app::DateTime rtcAtBoot = {};
+        if (readRtcWithRetry(rtc, rtcAtBoot)) {
+            // Success: Set the ESP32 system clock to the actual Hardware RTC time
+            const time_t rtcEpoch = epochFromDateTime(rtcAtBoot);
+            const struct timeval tv = {.tv_sec = rtcEpoch, .tv_usec = 0};
+            settimeofday(&tv, nullptr);
+            Serial.println("System clock synced to Hardware RTC.");
+        } else {
+            // Fail: The RTC is struggling. DO NOT overwrite it.
+            Serial.println("RTC read failed. Hardware time preserved (not overwritten).");
+        }
+    }
+
+    bool isBmeDataValid(const bme280_app::BME280Data& value) {
+        return std::isfinite(value.temperatureC)
+            && std::isfinite(value.humidityPercent)
+            && std::isfinite(value.pressureHpa)
+            && value.temperatureC >= -40.0F
+            && value.temperatureC <= 85.0F
+            && value.humidityPercent >= 0.0F
+            && value.humidityPercent <= 100.0F
+            && value.pressureHpa >= 300.0F
+            && value.pressureHpa <= 1100.0F;
+    }
+
+    bool isDataFresh(unsigned long updatedAtMs, unsigned long maxAgeMs, unsigned long nowMs) {
+        return (nowMs - updatedAtMs) <= maxAgeMs;
+    }
+
+    void logBmeDataOrFallback(const bme280_app::BME280Data* bmeData) {
+        if (bmeData != nullptr) {
+            Serial.printf(
+                "T: %.1f C RH: %.1f%% P: %.1f hPa\n",
+                bmeData->temperatureC,
+                bmeData->humidityPercent,
+                bmeData->pressureHpa);
+        } else {
+            Serial.println("BME280 fallback unavailable or stale");
+        }
+    }
+
+    void showRtcFallbackTime(
+        const clock_app::DS1307clock& rtc,
+        const LastKnownGoodData& lastKnownGood,
+        unsigned long nowMs,
+        oled_app::SSD1306Display& display,
+        const bme280_app::BME280Data* bmeToDisplay,
+        bool withSerialLogging) {
+
+        const bool rtcFallbackFresh = lastKnownGood.hasRtc
+            && isDataFresh(lastKnownGood.rtcUpdatedAtMs, kRtcDataStaleMs, nowMs);
+
+        if (rtcFallbackFresh) {
+            if (withSerialLogging) {
+                Serial.println("RTC fallback: using last known good RTC value");
+                logBmeDataOrFallback(bmeToDisplay);
+            }
+            display.showDateTime(lastKnownGood.rtc, bmeToDisplay);
+            return;
+        }
+
+        char systemDateTime[20] = {0};
+        rtc.get_datetime(systemDateTime, sizeof(systemDateTime));
+        if (withSerialLogging) {
+            Serial.printf("System time fallback: %s\n", systemDateTime);
+            logBmeDataOrFallback(bmeToDisplay);
+        }
+        display.showRtcFallbackTime(systemDateTime, bmeToDisplay);
+    }
+}  // namespace
+
+
+clock_app::DS1307clock rtc;
+clock_app::DateTime dateTime;
+oled_app::SSD1306Display display;
+bme280_app::BME280 bme280;
+scanner_app::I2CScanResult i2cScanResult;
+bool rtcErrorActive = false;
+unsigned long rtcErrorStartedAtMs = 0;
+uint8_t rtcConsecutiveFailures = 0;
+bool rtcPresent = true;
+LastKnownGoodData lastKnownGood;
+
+
+bool isDeviceFound(const scanner_app::I2CScanResult& scanResult, uint8_t address) {
+    for (uint8_t i = 0; i < scanResult.count; ++i) {
+        if (scanResult.addresses[i] == address) {
+            return true;
+        }
+    }
     return false;
 }
 
-static void init_uart(void) {
-    uart_config_t uart_cfg{};
-    uart_cfg.baud_rate = UART_BAUD_RATE;
-    uart_cfg.data_bits = UART_DATA_8_BITS;
-    uart_cfg.parity = UART_PARITY_DISABLE;
-    uart_cfg.stop_bits = UART_STOP_BITS_1;
-    uart_cfg.flow_ctrl = UART_HW_FLOWCTRL_DISABLE;
-    uart_cfg.source_clk = UART_SCLK_DEFAULT;
 
-    uart_driver_install(UART_PORT, 1024, 1024, 0, NULL, 0);
-    uart_param_config(UART_PORT, &uart_cfg);
+void setup() {
+    Serial.begin(115200);
+    if (!bme280.begin(Wire, kI2cSdaPin, kI2cSclPin)) {
+        Serial.println("BME280 init error");
+        display.showError("BME280 init error");
+    }
 
-    //UART_PIN_NO_CHANGE for each one means the driver keeps whatever pin mapping is already active.
-    uart_set_pin(UART_PORT, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
+    display.begin();
+    display.showStartupMessage("OLED initialized");
 
-    ESP_LOGI(TAG, "UART initialized at %d baud rate", UART_BAUD_RATE);
+    delay(kStartupMessageMs);
+
+    scanner_app::scanI2CDevices(Wire, Serial, i2cScanResult);
+    rtcPresent = isDeviceFound(i2cScanResult, clock_app::DS1307clock::kAddress);
+
+    if (!rtcPresent) {
+        Serial.println("RTC not connected, fallback mode enabled");
+        rtc.initSystemTimeFromBuild();
+    }
+
+    syncRtcOnBoot(rtc, rtcPresent);
+
+    Serial.println("System initialized!");
 }
 
-static void init_adc(void) {
-    // ADC continuous handle config
-    adc_continuous_handle_cfg_t adc_config{};
-    adc_config.max_store_buf_size = ADC_BUFFER_SIZE * 2;
-    adc_config.conv_frame_size = ADC_BUFFER_SIZE;
-    adc_config.flags.flush_pool = 0;
 
-    ESP_ERROR_CHECK(adc_continuous_new_handle(&adc_config, &adc_handle));
+void loop() {
+    const unsigned long nowMs = millis();
 
-    // ADC channel pattern
-    adc_digi_pattern_config_t pattern{};
-    pattern.atten = ADC_ATTEN_DB_12;
-    pattern.channel = ADC_CHAN;
-    pattern.unit = ADC_UNIT;
-    pattern.bit_width = SOC_ADC_DIGI_MAX_BITWIDTH;
+    const bool rtcOk = rtcPresent && readRtcWithRetry(rtc, dateTime);
 
-    // ADC continuous config
-    adc_continuous_config_t dig_cfg{};
-    dig_cfg.pattern_num = 1;
-    dig_cfg.adc_pattern = &pattern;
-    dig_cfg.sample_freq_hz = ADC_SAMPLE_RATE_HZ;
-    dig_cfg.conv_mode = ADC_CONV_SINGLE_UNIT_1;
-    dig_cfg.format = ADC_DIGI_OUTPUT_FORMAT_TYPE2;
+    if (rtcOk) {
+        rtcConsecutiveFailures = 0;
+        lastKnownGood.rtc = dateTime;
+        lastKnownGood.rtcUpdatedAtMs = nowMs;
+        lastKnownGood.hasRtc = true;
+    } else if (rtcConsecutiveFailures < 255U) {
+        ++rtcConsecutiveFailures;
+    }
 
-    ESP_ERROR_CHECK(adc_continuous_config(adc_handle, &dig_cfg));
+    // Even if RTC read is successful, the data might be invalid (e.g. due to RTC battery failure),
+    // so we check validity separately and only log valid data.
+    bme280_app::BME280Data currentBmeData;
+    const bool bmeReadOk = bme280.readData(currentBmeData);
+    const bool bmeOk = bmeReadOk && isBmeDataValid(currentBmeData);
+    if (bmeOk) {
+        lastKnownGood.bme = currentBmeData;
+        lastKnownGood.bmeUpdatedAtMs = nowMs;
+        lastKnownGood.hasBme = true;
+    }
 
-    // Register callback
-    adc_continuous_evt_cbs_t cbs{};
-    cbs.on_conv_done = adc_on_conv_done;
-    ESP_ERROR_CHECK(adc_continuous_register_event_callbacks(adc_handle, &cbs, NULL));
+    const bool bmeFallbackFresh = lastKnownGood.hasBme
+        && isDataFresh(lastKnownGood.bmeUpdatedAtMs, kBmeDataStaleMs, nowMs);
+    const bme280_app::BME280Data* bmeToDisplay = bmeFallbackFresh ? &lastKnownGood.bme : nullptr;
 
-    ESP_LOGI(TAG, "ADC initialized at %d Hz, channel=%d", ADC_SAMPLE_RATE_HZ, ADC_CHAN);
-}
+    const bool rtcFailurePersistent = rtcConsecutiveFailures >= kRtcFailureThreshold;
 
-extern "C" void app_main() {
-    // Initialize UART and ADC with DMA
-    init_uart();
-    init_adc();
-
-    // Start ADC continuous mode
-    ESP_ERROR_CHECK(adc_continuous_start(adc_handle));
-    ESP_LOGI(TAG, "ADC DMA communication started, reading values...");
-
-    uint8_t result[ADC_BUFFER_SIZE];
-    uint32_t returned_byte_num = 0;
-    uint64_t sample_count = 0;
-    int64_t print_timer = esp_timer_get_time();
-
-    while (1) {
-        // Read ADC data from DMA buffer (non-blocking with timeout)
-        esp_err_t ret = adc_continuous_read(adc_handle, result, ADC_BUFFER_SIZE, &returned_byte_num, pdMS_TO_TICKS(100));
-
-        if (ret == ESP_OK && returned_byte_num > 0) {
-            // Process ADC results
-            for (uint32_t i = 0; i < returned_byte_num; i += SOC_ADC_DIGI_RESULT_BYTES) {
-                if (i + SOC_ADC_DIGI_RESULT_BYTES <= returned_byte_num) {
-                    adc_digi_output_data_t *p = (adc_digi_output_data_t *)&result[i];
-                    uint32_t channel = p->type2.channel;
-                    uint32_t data = p->type2.data;
-
-                    sample_count++;
-
-                    // Print raw ADC value to UART console using DMA (uart_write_bytes uses FIFO/DMA)
-                    char buf[32];
-                    int len = snprintf(buf, sizeof(buf), "CH%" PRIu32 ": %04" PRIu32 "\n", channel, data);
-                    uart_write_bytes(UART_PORT, (const char *)buf, len);
-                }
-            }
-
-            // Print statistics every PRINT_INTERVAL_MS
-            int64_t now = esp_timer_get_time();
-            if ((now - print_timer) >= (PRINT_INTERVAL_MS * 1000)) {
-                uint32_t sample_rate = (uint32_t)((sample_count * 1000000) / (now - print_timer));
-                ESP_LOGI(TAG, "Taken Samples/sec: %u, Total: %llu", sample_rate, sample_count);
-                print_timer = now;
-            }
+    if (!rtcOk && rtcFailurePersistent) {
+        if (!rtcErrorActive) {
+            rtcErrorActive = true;
+            rtcErrorStartedAtMs = millis();
+            Serial.println(rtcPresent ? "RTC read/validation error" : "RTC not connected");
         }
 
-        vTaskDelay(pdMS_TO_TICKS(1));
+        const unsigned long errorDurationMs = millis() - rtcErrorStartedAtMs;
+        if (errorDurationMs < kRtcErrorDisplayMs) {
+            display.showError("RTC read error");
+        } else {
+            showRtcFallbackTime(rtc, lastKnownGood, nowMs, display, bmeToDisplay, true);
+        }
+    } else if (!rtcOk) {
+        showRtcFallbackTime(rtc, lastKnownGood, nowMs, display, bmeToDisplay, false);
+    } else {
+        rtcErrorActive = false;
+
+        Serial.printf("%02u:%02u:%02u\n", dateTime.hour, dateTime.minute, dateTime.second);
+        Serial.printf(
+            "%s %02u.%02u.%04u\n",
+            clock_app::DS1307clock::dayToShortName(dateTime.dayOfWeek),
+            dateTime.dayOfMonth,
+            dateTime.month,
+            dateTime.year);
+
+        if (bmeToDisplay != nullptr) {
+            Serial.printf(
+                "T: %.1f C RH: %.1f%% P: %.1f hPa\n",
+                bmeToDisplay->temperatureC,
+                bmeToDisplay->humidityPercent,
+                bmeToDisplay->pressureHpa);
+            display.showDateTime(dateTime, bmeToDisplay);
+        } else {
+            Serial.println("BME280 read/validation error and no fresh fallback");
+            display.showDateTime(dateTime);
+        }
     }
+
+    delay(kLoopIntervalMs);
 }

@@ -39,17 +39,6 @@ Open serial monitor (115200 baud):
 pio device monitor -b 115200
 ```
 
-## Configuration
-
-Key constants in `src/main.cpp`:
-
-| Constant | Default | Description |
-|---|---|---|
-| `ADC_CHAN` | `ADC_CHANNEL_0` | ADC channel (GPIO 1 on ESP32-S3) |
-| `ADC_SAMPLE_RATE_HZ` | `20000` | ADC sampling frequency in Hz |
-| `ADC_BUFFER_SIZE` | `256` | DMA conversion frame size in bytes |
-| `UART_BAUD_RATE` | `115200` | UART baud rate |
-| `PRINT_INTERVAL_MS` | `1000` | Statistics print interval in ms |
 
 Platform settings (`platformio.ini`): framework `espidf`, flash mode `qio`, flash size `16MB`, monitor `115200` baud.
 
