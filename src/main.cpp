@@ -1,6 +1,6 @@
 #include <cstring>
 
-#include "driver/i2c.h"
+#include "driver/i2c_master.h"
 #include "esp_log.h"
 
 #include "at24c32.h"
@@ -20,26 +20,29 @@ namespace {
     constexpr unsigned long kRtcDataStaleMs = 30000UL; // 30 seconds, after which RTC fallback is considered stale and not used
     constexpr unsigned long kBmeDataStaleMs = 10000UL; // 10 seconds, after which BME280 fallback is considered stale and not used
 
+    i2c_master_bus_handle_t g_i2c_bus_handle = nullptr;
+
     esp_err_t I2cInit(void)
     {
-        i2c_config_t conf = {
-            .mode = I2C_MODE_MASTER,
-            .sda_io_num = kI2cSdaPin,
+        i2c_master_bus_config_t bus_cfg = {
+            .clk_source = I2C_CLK_SRC_DEFAULT,
+            .i2c_port = I2C_NUM_0,
             .scl_io_num = kI2cSclPin,
-            .sda_pullup_en = GPIO_PULLUP_ENABLE,
-            .scl_pullup_en = GPIO_PULLUP_ENABLE,
-            .master = {
-                .clk_speed = kI2cFreqHz,
+            .sda_io_num = kI2cSdaPin,
+            .glitch_ignore_cnt = 7,
+            .flags = {
+                .enable_internal_pullup = true,
             },
-            .clk_flags = 0,
         };
 
-        esp_err_t err = i2c_param_config(I2C_NUM_0, &conf);
+        esp_err_t err = i2c_new_master_bus(&bus_cfg, &g_i2c_bus_handle);
         if (err != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to create I2C master bus");
             return err;
         }
 
-        return i2c_driver_install(I2C_NUM_0, conf.mode, 0, 0, 0);
+        ESP_LOGI(TAG, "I2C master bus initialized");
+        return ESP_OK;
     }
 }
 
@@ -49,6 +52,13 @@ extern "C" void app_main(void)
     esp_err_t err = I2cInit();
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "I2C init failed: %s", esp_err_to_name(err));
+        return;
+    }
+
+    // Initialize AT24C32 on I2C bus
+    err = at24c32_init(g_i2c_bus_handle);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "AT24C32 init failed: %s", esp_err_to_name(err));
         return;
     }
 

@@ -2,7 +2,6 @@
 
 #include <stddef.h>
 #include <stdint.h>
-
 #include "esp_err.h"
 
 // Logger constants
