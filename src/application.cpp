@@ -15,8 +15,8 @@ esp_err_t Application::initI2c()
 {
     i2c_master_bus_config_t busConfig = {};
     busConfig.i2c_port = I2C_NUM_0;
-    busConfig.sda_io_num = kI2cSdaPin;
-    busConfig.scl_io_num = kI2cSclPin;
+    busConfig.sda_io_num = kSdaPin;
+    busConfig.scl_io_num = kSclPin;
     busConfig.clk_source = I2C_CLK_SRC_DEFAULT;
     busConfig.glitch_ignore_cnt = 7;
     busConfig.flags.enable_internal_pullup = true;

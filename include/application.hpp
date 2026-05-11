@@ -11,8 +11,8 @@ public:
 
 private:
     static constexpr gpio_num_t kButtonPin = GPIO_NUM_0;
-    static constexpr gpio_num_t kI2cSdaPin = GPIO_NUM_8;
-    static constexpr gpio_num_t kI2cSclPin = GPIO_NUM_9;
+    static constexpr gpio_num_t kSdaPin = GPIO_NUM_8;
+    static constexpr gpio_num_t kSclPin = GPIO_NUM_9;
 
     esp_err_t initI2c();
     esp_err_t initButton();
