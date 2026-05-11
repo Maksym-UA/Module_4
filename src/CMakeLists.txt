@@ -8,8 +8,6 @@ set(lib_sources
 )
 
 idf_component_register(
-	SRCS ${app_sources} ${lib_sources}
-	INCLUDE_DIRS
-		${CMAKE_SOURCE_DIR}/lib/at24c32
-		${CMAKE_SOURCE_DIR}/lib/logger
+    SRCS "main.cpp" "../lib/at24c32/at24c32.cpp" "../lib/logger/logger.cpp"
+    INCLUDE_DIRS "." "../lib/at24c32" "../lib/logger"
 )

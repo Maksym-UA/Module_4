@@ -1,125 +1,234 @@
 #include "logger.h"
 
-#include <cstring>
 #include <cstdio>
+#include <cstring>
 
 #include "at24c32.h"
 #include "esp_log.h"
 
 static const char *TAG = "logger";
 
-static logger_state_t g_logger_state = {};
+namespace {
+constexpr uint16_t kEepromSizeBytes = 4096;  // AT24C32 = 32 Kbit = 4 KB
+constexpr uint16_t kPageSize = AT24C32_PAGE; // 32 bytes
+constexpr uint16_t kMetaPageAddr = 0x0000;
+constexpr uint16_t kDataBaseAddr = kPageSize; // page 0 reserved for metadata
+constexpr uint16_t kMaxEntries = (kEepromSizeBytes - kDataBaseAddr) / kPageSize;
+constexpr uint32_t kMagic = 0x4C4F4747; // 'LOGG'
 
-esp_err_t logger_init(void)
+struct LoggerMeta {
+    uint32_t magic;
+    uint16_t head;      // next write index
+    uint16_t count;     // stored entries
+    uint32_t next_seq;   // log number
+};
+
+static_assert(sizeof(LoggerMeta) <= AT24C32_PAGE, "Metadata must fit one page");
+
+LoggerMeta g_meta{};
+bool g_initialized = false;
+
+uint16_t record_addr(uint16_t index)
 {
-    // Read logger state from first 4 bytes of EEPROM
-    uint8_t state_buf[4] = {0};
-    esp_err_t err = at24c32_read(EEPROM_START, state_buf, sizeof(state_buf));
-    if (err != ESP_OK) {
-        ESP_LOGW(TAG, "Failed to read logger state, initializing fresh");
-        g_logger_state.log_count = 0;
-        g_logger_state.current_index = 0;
-    } else {
-        g_logger_state.log_count = (state_buf[0] << 8) | state_buf[1];
-        g_logger_state.current_index = (state_buf[2] << 8) | state_buf[3];
-
-        // Validate state
-        if (g_logger_state.current_index >= MAX_LOGS) {
-            ESP_LOGW(TAG, "Invalid logger state, resetting");
-            g_logger_state.log_count = 0;
-            g_logger_state.current_index = 0;
-        }
-    }
-
-    ESP_LOGI(TAG, "Logger initialized: count=%u, index=%u",
-             g_logger_state.log_count, g_logger_state.current_index);
-
-    return ESP_OK;
+    return static_cast<uint16_t>(kDataBaseAddr + index * kPageSize);
 }
 
-static esp_err_t logger_write_state(void)
+esp_err_t load_meta()
 {
-    uint8_t state_buf[4] = {
-        (uint8_t)((g_logger_state.log_count >> 8) & 0xFF),
-        (uint8_t)(g_logger_state.log_count & 0xFF),
-        (uint8_t)((g_logger_state.current_index >> 8) & 0xFF),
-        (uint8_t)(g_logger_state.current_index & 0xFF),
-    };
-
-    return at24c32_write(EEPROM_START, state_buf, sizeof(state_buf));
-}
-
-esp_err_t logger_write(const char *message)
-{
-    if (!message) {
-        return ESP_ERR_INVALID_ARG;
-    }
-
-    // Format log entry: "#LOG_NUM Message" padded to LOG_SIZE
-    char log_entry[LOG_SIZE] = {0};
-
-    // Create log number (wraps at MAX_LOGS)
-    uint16_t log_num = g_logger_state.log_count % MAX_LOGS;
-    int written = snprintf(log_entry, LOG_SIZE, "#%u %s", log_num, message);
-
-    if (written < 0 || written >= LOG_SIZE) {
-        ESP_LOGW(TAG, "Log entry truncated");
-    }
-
-    // Pad with null terminators
-    while (written < LOG_SIZE) {
-        log_entry[written++] = '\0';
-    }
-
-    // Calculate memory address: skip state (4 bytes), then find position
-    uint16_t write_addr = 4 + (g_logger_state.current_index * LOG_SIZE);
-
-    // Write to EEPROM
-    esp_err_t err = at24c32_write(write_addr, (const uint8_t *)log_entry, LOG_SIZE);
+    uint8_t page[kPageSize] = {};
+    esp_err_t err = at24c32_read(kMetaPageAddr, page, sizeof(page));
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to write log to EEPROM");
         return err;
     }
 
-    // Update state
-    g_logger_state.log_count++;
-    g_logger_state.current_index = (g_logger_state.current_index + 1) % MAX_LOGS;
+    std::memcpy(&g_meta, page, sizeof(g_meta));
 
-    // Write updated state back
-    err = logger_write_state();
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to write logger state");
+    if (g_meta.magic != kMagic || g_meta.head >= kMaxEntries || g_meta.count > kMaxEntries) {
+        g_meta.magic = kMagic;
+        g_meta.head = 0;
+        g_meta.count = 0;
+        g_meta.next_seq = 1;
     }
 
     return ESP_OK;
 }
 
-esp_err_t logger_read(uint16_t index, char *log_buffer)
+esp_err_t save_meta()
 {
-    if (!log_buffer || index >= MAX_LOGS) {
+    uint8_t page[kPageSize] = {};
+    std::memcpy(page, &g_meta, sizeof(g_meta));
+    return at24c32_write(kMetaPageAddr, page, sizeof(page));
+}
+
+esp_err_t read_record_by_index(uint16_t index, char *out, size_t out_len)
+{
+    if (!out || out_len == 0) {
         return ESP_ERR_INVALID_ARG;
     }
 
-    uint16_t read_addr = 4 + (index * LOG_SIZE);
+    uint8_t page[kPageSize] = {};
+    esp_err_t err = at24c32_read(record_addr(index), page, sizeof(page));
+    if (err != ESP_OK) {
+        return err;
+    }
 
-    return at24c32_read(read_addr, (uint8_t *)log_buffer, LOG_SIZE);
+    std::snprintf(out, out_len, "%s", reinterpret_cast<char *>(page));
+    return ESP_OK;
 }
 
-esp_err_t logger_read_last(char *log_buffer)
+bool parse_log_no(const char *text, uint32_t *log_no)
 {
-    if (!log_buffer || g_logger_state.log_count == 0) {
+    if (!text || text[0] != '#') {
+        return false;
+    }
+
+    unsigned long value = 0;
+    if (std::sscanf(text, "#%lu", &value) != 1) {
+        return false;
+    }
+
+    if (log_no) {
+        *log_no = static_cast<uint32_t>(value);
+    }
+    return true;
+}
+} // namespace
+
+esp_err_t logger_init(void)
+{
+    if (g_initialized) {
+        return ESP_OK;
+    }
+
+    esp_err_t err = load_meta();
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    if (g_meta.magic != kMagic) {
+        g_meta.magic = kMagic;
+        g_meta.head = 0;
+        g_meta.count = 0;
+        g_meta.next_seq = 1;
+        err = save_meta();
+        if (err != ESP_OK) {
+            return err;
+        }
+    }
+
+    g_initialized = true;
+    ESP_LOGI(TAG, "Logger initialized, max entries: %u", static_cast<unsigned>(kMaxEntries));
+    return ESP_OK;
+}
+
+esp_err_t logger_write(const char *msg)
+{
+    if (!g_initialized) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (!msg) {
         return ESP_ERR_INVALID_ARG;
     }
 
-    // Last log is at (current_index - 1), with wrap-around
-    uint16_t last_index = (g_logger_state.current_index > 0) ?
-                          (g_logger_state.current_index - 1) :
-                          (MAX_LOGS - 1);
+    uint8_t page[kPageSize] = {};
+    const int written = std::snprintf(
+        reinterpret_cast<char *>(page),
+        sizeof(page),
+        "#%lu %s",
+        static_cast<unsigned long>(g_meta.next_seq),
+        msg
+    );
 
-    return logger_read(last_index, log_buffer);
+    if (written < 0) {
+        return ESP_FAIL;
+    }
+    if (written >= static_cast<int>(sizeof(page))) {
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    esp_err_t err = at24c32_write(record_addr(g_meta.head), page, sizeof(page));
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    g_meta.head = static_cast<uint16_t>((g_meta.head + 1) % kMaxEntries);
+    if (g_meta.count < kMaxEntries) {
+        ++g_meta.count;
+    }
+    ++g_meta.next_seq;
+
+    return save_meta();
 }
 
-uint16_t logger_get_count(void)
+esp_err_t logger_read_last(char *out, size_t out_len)
 {
-    return g_logger_state.log_count;
+    if (!g_initialized) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (!out || out_len == 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (g_meta.count == 0) {
+        out[0] = '\0';
+        return ESP_ERR_NOT_FOUND;
+    }
+
+    const uint16_t last_index = static_cast<uint16_t>((g_meta.head + kMaxEntries - 1) % kMaxEntries);
+    return read_record_by_index(last_index, out, out_len);
+}
+
+esp_err_t logger_find_last_log(uint32_t *log_no, uint16_t *page_addr)
+{
+    if (!g_initialized) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (g_meta.count == 0) {
+        return ESP_ERR_NOT_FOUND;
+    }
+
+    const uint16_t last_index = static_cast<uint16_t>((g_meta.head + kMaxEntries - 1) % kMaxEntries);
+    if (page_addr) {
+        *page_addr = record_addr(last_index);
+    }
+
+    char line[kPageSize + 1] = {};
+    esp_err_t err = read_record_by_index(last_index, line, sizeof(line));
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    if (!parse_log_no(line, log_no)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    return ESP_OK;
+}
+
+esp_err_t logger_dump_to_uart(void)
+{
+    if (!g_initialized) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    ESP_LOGI(TAG, "=== EEPROM LOG DUMP (newest -> oldest) ===");
+
+    if (g_meta.count == 0) {
+        ESP_LOGI(TAG, "No logs stored");
+        return ESP_OK;
+    }
+
+    char line[kPageSize + 1] = {};
+    for (uint16_t i = 0; i < g_meta.count; ++i) {
+        const uint16_t idx = static_cast<uint16_t>((g_meta.head + kMaxEntries - 1 - i) % kMaxEntries);
+        esp_err_t err = read_record_by_index(idx, line, sizeof(line));
+        if (err != ESP_OK) {
+            return err;
+        }
+
+        if (line[0] != '\0') {
+            ESP_LOGI(TAG, "%s", line);
+        }
+    }
+
+    return ESP_OK;
 }

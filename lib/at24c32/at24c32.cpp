@@ -10,11 +10,12 @@ static i2c_master_dev_handle_t g_at24c32_handle = nullptr;
 
 esp_err_t at24c32_init(i2c_master_bus_handle_t bus_handle)
 {
-    i2c_device_config_t dev_cfg = {
-        .dev_addr_length = I2C_ADDR_BIT_7,
-        .device_address = AT24C32_ADDR,
-        .scl_speed_hz = 100000,
-    };
+    i2c_device_config_t dev_cfg = {};
+    dev_cfg.dev_addr_length = I2C_ADDR_BIT_LEN_7;
+    dev_cfg.device_address = AT24C32_ADDR;
+    dev_cfg.scl_speed_hz = 100000;
+    dev_cfg.scl_wait_us = 0;
+    dev_cfg.flags.disable_ack_check = false;
 
     esp_err_t err = i2c_master_bus_add_device(bus_handle, &dev_cfg, &g_at24c32_handle);
     if (err != ESP_OK) {
