@@ -1,12 +1,11 @@
 #include "at24c32.h"
-
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
 namespace {
-static const char* TAG = "at24c32";
-static i2c_master_dev_handle_t s_deviceHandle = nullptr;
+    static const char* TAG = "at24c32";
+    static i2c_master_dev_handle_t s_deviceHandle = nullptr;
 }
 
 esp_err_t at24c32_init(i2c_master_bus_handle_t bus_handle)
@@ -20,12 +19,13 @@ esp_err_t at24c32_init(i2c_master_bus_handle_t bus_handle)
     }
 
     i2c_device_config_t devConfig = {};
-    devConfig.dev_addr_length = I2C_ADDR_BIT_LEN_7;
+    devConfig.dev_addr_length = I2C_ADDR_BIT_LEN_7;// AT24C32 uses 7-bit addressing
     devConfig.device_address = AT24C32_ADDR;
-    devConfig.scl_speed_hz = 100000;
+    devConfig.scl_speed_hz = 100000;// Standard I2C speed for EEPROMs
     devConfig.scl_wait_us = 0;
     devConfig.flags.disable_ack_check = false;
 
+    // Add the device to the I2C bus
     esp_err_t err = i2c_master_bus_add_device(bus_handle, &devConfig, &s_deviceHandle);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to add device: %s", esp_err_to_name(err));
@@ -36,6 +36,7 @@ esp_err_t at24c32_init(i2c_master_bus_handle_t bus_handle)
     return ESP_OK;
 }
 
+// Writes data to the EEPROM starting at the specified memory address
 esp_err_t at24c32_write(uint16_t mem_addr, const uint8_t* data, size_t len)
 {
     if (s_deviceHandle == nullptr) {
@@ -58,7 +59,7 @@ esp_err_t at24c32_write(uint16_t mem_addr, const uint8_t* data, size_t len)
         for (size_t i = 0; i < chunkSize; ++i) {
             buffer[2 + i] = data[i];
         }
-
+        // Send the memory address followed by the data chunk
         esp_err_t err = i2c_master_transmit(
             s_deviceHandle,
             buffer,
@@ -70,7 +71,7 @@ esp_err_t at24c32_write(uint16_t mem_addr, const uint8_t* data, size_t len)
             return err;
         }
 
-        vTaskDelay(pdMS_TO_TICKS(10));
+        vTaskDelay(pdMS_TO_TICKS(10));// EEPROM write cycle time
 
         mem_addr = static_cast<uint16_t>(mem_addr + chunkSize);
         data += chunkSize;

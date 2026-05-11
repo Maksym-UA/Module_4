@@ -1,104 +1,106 @@
 #include "logger.h"
-
 #include <cstdio>
 #include <cstring>
-
 #include "at24c32.h"
 #include "esp_log.h"
 
 namespace {
-static const char* TAG = "logger";
+    static const char* TAG = "logger";
 
-constexpr uint16_t kEepromSizeBytes = 4096;
-constexpr uint16_t kPageSize = AT24C32_PAGE;
-constexpr uint16_t kMetaPageAddr = 0x0000;
-constexpr uint16_t kDataBaseAddr = kPageSize;
-constexpr uint16_t kMaxEntries = (kEepromSizeBytes - kDataBaseAddr) / kPageSize;
-constexpr uint32_t kMagic = 0x4C4F4747;
+    constexpr uint16_t kEepromSizeBytes = 4096;// 32 pages of 128 bytes each
+    constexpr uint16_t kPageSize = AT24C32_PAGE;// 32 bytes per page
+    constexpr uint16_t kMetaPageAddr = 0x0000;
+    constexpr uint16_t kDataBaseAddr = kPageSize;
+    constexpr uint16_t kMaxEntries = (kEepromSizeBytes - kDataBaseAddr) / kPageSize;
+    constexpr uint32_t kValidator = 0x4C4F4747;// 'LOGG' in ASCII
 
-struct LoggerMeta {
-    uint32_t magic;
-    uint16_t head;
-    uint16_t count;
-    uint32_t next_seq;
-};
 
-static_assert(sizeof(LoggerMeta) <= AT24C32_PAGE, "Metadata must fit into one EEPROM page");
+    struct LoggerMeta {
+        uint32_t magic;// Magic number to validate the metadata
+        uint16_t head;// Index of the next log entry to write (0-based)
+        uint16_t count;// Number of log entries currently stored
+        uint32_t next_seq;// Next sequence number to assign
+    };
 
-LoggerMeta s_meta{};
-bool s_initialized = false;
+    static_assert(sizeof(LoggerMeta) <= AT24C32_PAGE, "Metadata must fit into one EEPROM page");
 
-uint16_t recordAddress(uint16_t index)
-{
-    return static_cast<uint16_t>(kDataBaseAddr + index * kPageSize);
+    LoggerMeta s_meta{}; // In-memory metadata cache
+    bool s_initialized = false;
+
+    uint16_t recordAddress(uint16_t index)
+    {
+        return static_cast<uint16_t>(kDataBaseAddr + index * kPageSize);
+    }
+
+    void resetMetadata()
+    {
+        s_meta.magic = kValidator;
+        s_meta.head = 0;
+        s_meta.count = 0;
+        s_meta.next_seq = 1; // Start sequence numbers from 1 for better readability
+    }
+
+    esp_err_t loadMetadata()// Loads metadata from EEPROM into s_meta
+    {
+        uint8_t page[kPageSize] = {};
+        esp_err_t err = at24c32_read(kMetaPageAddr, page, sizeof(page));
+        if (err != ESP_OK) {
+            return err;
+        }
+
+        std::memcpy(&s_meta, page, sizeof(s_meta));// Copy raw bytes into the struct
+
+        if (s_meta.magic != kValidator || s_meta.head >= kMaxEntries || s_meta.count > kMaxEntries) {
+            resetMetadata();
+        }
+
+        return ESP_OK;
+    }
+
+    esp_err_t saveMetadata()
+    {
+        uint8_t page[kPageSize] = {};
+        std::memcpy(page, &s_meta, sizeof(s_meta));// Copy raw bytes from the struct into the page buffer
+        return at24c32_write(kMetaPageAddr, page, sizeof(page));
+    }
+
+    esp_err_t readRecordByIndex(uint16_t index, char* out, size_t out_len)
+    {
+        if (out == nullptr || out_len == 0) {
+            return ESP_ERR_INVALID_ARG;
+        }
+
+        uint8_t page[kPageSize] = {};
+        esp_err_t err = at24c32_read(recordAddress(index), page, sizeof(page));
+        if (err != ESP_OK) {
+            return err;
+        }
+        // converting the raw memory pointer into a char* pointer
+        std::snprintf(out, out_len, "%s", reinterpret_cast<char*>(page));
+
+        return ESP_OK;
+    }
+
+    bool parseLogNumber(const char* text, uint32_t* log_no)
+    {
+        if (text == nullptr || text[0] != '#') {
+            return false;
+        }
+
+        unsigned long value = 0;
+        // Use sscanf to parse the log number after the '#' character
+        if (std::sscanf(text, "#%lu", &value) != 1) {
+            return false;
+        }
+
+        if (log_no != nullptr) {
+            *log_no = static_cast<uint32_t>(value);
+        }
+
+        return true;
+    }
 }
 
-void resetMetadata()
-{
-    s_meta.magic = kMagic;
-    s_meta.head = 0;
-    s_meta.count = 0;
-    s_meta.next_seq = 1;
-}
-
-esp_err_t loadMetadata()
-{
-    uint8_t page[kPageSize] = {};
-    esp_err_t err = at24c32_read(kMetaPageAddr, page, sizeof(page));
-    if (err != ESP_OK) {
-        return err;
-    }
-
-    std::memcpy(&s_meta, page, sizeof(s_meta));
-
-    if (s_meta.magic != kMagic || s_meta.head >= kMaxEntries || s_meta.count > kMaxEntries) {
-        resetMetadata();
-    }
-
-    return ESP_OK;
-}
-
-esp_err_t saveMetadata()
-{
-    uint8_t page[kPageSize] = {};
-    std::memcpy(page, &s_meta, sizeof(s_meta));
-    return at24c32_write(kMetaPageAddr, page, sizeof(page));
-}
-
-esp_err_t readRecordByIndex(uint16_t index, char* out, size_t out_len)
-{
-    if (out == nullptr || out_len == 0) {
-        return ESP_ERR_INVALID_ARG;
-    }
-
-    uint8_t page[kPageSize] = {};
-    esp_err_t err = at24c32_read(recordAddress(index), page, sizeof(page));
-    if (err != ESP_OK) {
-        return err;
-    }
-
-    std::snprintf(out, out_len, "%s", reinterpret_cast<char*>(page));
-    return ESP_OK;
-}
-
-bool parseLogNumber(const char* text, uint32_t* log_no)
-{
-    if (text == nullptr || text[0] != '#') {
-        return false;
-    }
-
-    unsigned long value = 0;
-    if (std::sscanf(text, "#%lu", &value) != 1) {
-        return false;
-    }
-
-    if (log_no != nullptr) {
-        *log_no = static_cast<uint32_t>(value);
-    }
-
-    return true;
-}
-} // namespace
 
 esp_err_t logger_init(void)
 {
@@ -112,7 +114,9 @@ esp_err_t logger_init(void)
         return err;
     }
 
-    if (s_meta.magic != kMagic) {
+    // If the magic number is invalid, it means the EEPROM is uninitialized or corrupted,
+    // so we reset it
+    if (s_meta.magic != kValidator) {
         resetMetadata();
         err = saveMetadata();
         if (err != ESP_OK) {
@@ -209,6 +213,7 @@ esp_err_t logger_find_last_log(uint32_t* log_no, uint16_t* page_addr)
     return ESP_OK;
 }
 
+// Dumps all logs to UART in order from newest to oldest
 esp_err_t logger_dump_to_uart(void)
 {
     if (!s_initialized) {

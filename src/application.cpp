@@ -3,12 +3,11 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_log.h"
-
 #include "at24c32.h"
 #include "logger.h"
 
 namespace {
-static const char* TAG = "Application";
+    static const char* TAG = "Application";
 }
 
 esp_err_t Application::initI2c()
@@ -31,11 +30,12 @@ esp_err_t Application::initButton()
     ioConfig.mode = GPIO_MODE_INPUT;
     ioConfig.pull_up_en = GPIO_PULLUP_ENABLE;
     ioConfig.pull_down_en = GPIO_PULLDOWN_DISABLE;
-    ioConfig.intr_type = GPIO_INTR_DISABLE;
+    ioConfig.intr_type = GPIO_INTR_DISABLE; // No interrupts needed for polling
 
     return gpio_config(&ioConfig);
 }
 
+// Initializes the AT24C32 EEPROM and the logger module
 esp_err_t Application::initModules()
 {
     esp_err_t err = at24c32_init(i2cBusHandle_);
@@ -55,7 +55,7 @@ esp_err_t Application::initModules()
 
 void Application::run()
 {
-    logger_write("System startup");
+    logger_write("System is starting up...");
 
     while (true) {
         if (gpio_get_level(kButtonPin) == 0) {
