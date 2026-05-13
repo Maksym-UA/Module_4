@@ -1,12 +1,3 @@
-idf_component_register(
-    SRCS
-        "main.cpp"
-        "application.cpp"
-        "../lib/at24c32/at24c32.cpp"
-        "../lib/logger/logger.cpp"
-    INCLUDE_DIRS
-        "."
-        "../include"
-        "../lib/at24c32"
-        "../lib/logger"
-)
+FILE(GLOB_RECURSE app_sources ${CMAKE_SOURCE_DIR}/src/*.*)
+
+idf_component_register(SRCS ${app_sources})
