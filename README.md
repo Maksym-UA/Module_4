@@ -1,80 +1,83 @@
-# ESP32-S3 EEPROM Logger (ESP-IDF + PlatformIO)
+# ESP32-S3 Wi-Fi + MQTT Control Demo
 
-This project implements a logger on ESP32-S3 using external EEPROM AT24C32 (DS1307 RTC modules) over I2C.
+ESP32-S3 project based on **ESP-IDF** (built with **PlatformIO**).
+The device connects to Wi-Fi (STA mode), connects to an MQTT broker, subscribes to command topic, and controls onboard logic (LED + status reporting).
 
 ## Features
 
+- Wi-Fi station initialization with reconnect retries
+- MQTT client start + event handling
+- Subscribe to command topic and process incoming commands
+- Publish periodic heartbeat messages
+- Publish device status on command
+- Safe MQTT topic/data copy with bounded buffers in event callback
 
-- Fixed-size log records: 32 bytes per log
-- Ring buffer behavior (overwrite oldest logs when memory is full)
-- Read last log
-- Find last log number and EEPROM page address
-- Dump logs to UART on button press (newest -> oldest)
+## MQTT Topics
 
-## EEPROM Capacity
+Defined in [`mqtt.h`](lib/mqtt/mqtt.h):
 
-AT24C32 size is *2 Kbit = 4096 bytes (4 KB).
+- `MQTT_TOPIC`: `esp32s3/test` (periodic publish)
+- `MQTT_COMMANDS`: `esp32s3/commands` (incoming commands)
+- `MQTT_STATUS`: `esp32s3/status` (status replies)
 
-- Record size: 32 bytes (1 page)
-- Metadata reserve: 1 page (32 bytes)
-- Data bytes: `4096 - 32 = 4064`
-- Max stored logs: `4064 / 32 = 127`
+Default broker URI:
 
-> 1024 logs × 32 bytes would require a larger EEPROM.
+- `mqtt://broker.hivemq.com:1883`
 
-## Hardware
+## Supported Commands
 
-- ESP32-S3 dev board
-- DS1307 RTC module with AT24C32 EEPROM
-- Push button (active-low, default `GPIO_NUM_0`)
-- (Optional) BME280, SSD1306
+Handled in [`handle_mqtt_message`](src/main.cpp):
 
-## Software
+- `ON` — set LED ON
+- `OFF` — set LED OFF
+- `STATUS` — publish `"ESP32-S3 is running"` to status topic
 
-- VS Code
-- PlatformIO extension
-- ESP-IDF toolchain (installed by PlatformIO)
+## Current Pin Usage
 
-## Default Pin Configuration
+From [`main.cpp`](src/main.cpp), [`servo.cpp`](src/servo.cpp), [`buzzer.cpp`](src/buzzer.cpp), [`encoder.cpp`](src/encoder.cpp):
 
-Defined in `src/main.cpp`:
-
-- I2C SDA: `GPIO_NUM_8`
-- I2C SCL: `GPIO_NUM_9`
-- Button: `GPIO_NUM_0` (active-low)
-
-## Build and Flash
-
-Build:
-```bash
-pio run -e esp32-s3-devkitc-1
-```
-
-Clean + build:
-```bash
-pio run -t clean
-pio run -e esp32-s3-devkitc-1
-```
-
-Flash:
-```bash
-pio run -e esp32-s3-devkitc-1 -t upload
-```
-
-Serial monitor (115200):
-```bash
-pio device monitor -b 115200
-```
+- LED: `GPIO_NUM_16`
+- Servo PWM output: `GPIO_NUM_18`
+- Buzzer PWM output: `GPIO_NUM_17`
+- Encoder A: `GPIO_NUM_5`
+- Encoder B: `GPIO_NUM_4`
+- Encoder button: `GPIO_NUM_6`
 
 ## Project Structure
 
-- `src/main.cpp` — app startup, I2C init, button handling, UART dump trigger
-- `lib/at24c32/at24c32.h/.cpp` — EEPROM driver
-- `lib/logger/logger.h/.cpp` — logger logic (ring buffer + metadata)
-- `src/CMakeLists.txt` — ESP-IDF component registration
-- `platformio.ini` — board/framework/build settings
+- [`src/main.cpp`](src/main.cpp) — app entry, NVS init, LED setup, Wi-Fi + MQTT startup, periodic publish
+- [`lib/wifi/wifi_setup.cpp`](lib/wifi/wifi_setup.cpp) / [`lib/wifi/wifi_setup.h`](lib/wifi/wifi_setup.h) — Wi-Fi STA connection logic
+- [`lib/mqtt/mqtt.cpp`](lib/mqtt/mqtt.cpp) / [`lib/mqtt/mqtt.h`](lib/mqtt/mqtt.h) — MQTT client/event handling and message callback registration
+- [`src/servo.cpp`](src/servo.cpp) / [`include/servo.hpp`](include/servo.hpp) — servo control via LEDC
+- [`src/buzzer.cpp`](src/buzzer.cpp) / [`include/buzzer.hpp`](include/buzzer.hpp) — buzzer beeps via LEDC
+- [`src/encoder.cpp`](src/encoder.cpp) / [`include/encoder.hpp`](include/encoder.hpp) — quadrature encoder using PCNT
+- [`lib/credentials/credentials.h`](lib/credentials/credentials.h) — Wi-Fi credentials
+- [`platformio.ini`](platformio.ini) — PlatformIO environment configuration
 
+## Build / Flash / Monitor
 
-## Contact
+From project root:
 
-Feedback: `max.savin3@gmail.com`
+```bash
+pio run -e esp32-s3-devkitc-1
+pio run -e esp32-s3-devkitc-1 -t upload
+pio device monitor -b 115200
+```
+
+You can also use VS Code tasks from [`.vscode/tasks.json`](.vscode/tasks.json):
+
+- `PlatformIO: Build (Module_4)`
+- `PlatformIO: Upload (Module_4)`
+- `PlatformIO: Monitor (Module_4)`
+
+## Configuration Notes
+
+1. Set valid Wi-Fi credentials in [`lib/credentials/credentials.h`](lib/credentials/credentials.h).
+2. Verify broker/topic constants in [`lib/mqtt/mqtt.h`](lib/mqtt/mqtt.h).
+3. Framework/tooling settings are in [`platformio.ini`](platformio.ini) and [`.vscode/settings.json`](.vscode/settings.json).
+
+## Troubleshooting
+
+- If Wi-Fi does not connect, check SSID/password and AP availability.
+- If MQTT connects but no command handling occurs, verify topic matches `esp32s3/commands`.
+- If upload works but monitor is silent, confirm baud rate `115200`.

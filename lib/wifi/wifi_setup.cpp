@@ -66,8 +66,8 @@ void wifi_init_sta(void)
                                                         &event_handler, NULL, &instance_got_ip));
 
     wifi_config_t wifi_config = {};
-    memcpy(wifi_config.sta.ssid,     WIFI_SSID,     strlen(WIFI_SSID));
-    memcpy(wifi_config.sta.password, WIFI_PASSWORD, strlen(WIFI_PASSWORD));
+    strncpy((char *)wifi_config.sta.ssid, WIFI_SSID, sizeof(wifi_config.sta.ssid) - 1);
+    strncpy((char *)wifi_config.sta.password, WIFI_PASSWORD, sizeof(wifi_config.sta.password) - 1);
 
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
@@ -81,4 +81,12 @@ void wifi_init_sta(void)
     } else {
         ESP_LOGE(TAG, "Connection failed: %s", WIFI_SSID);
     }
+   
+       // Verify WiFi is actually connected
+       wifi_ap_record_t ap_info;
+       if (esp_wifi_sta_get_ap_info(&ap_info) == ESP_OK) {
+           ESP_LOGI(TAG, "WiFi verified: SSID=%s, RSSI=%d", ap_info.ssid, ap_info.rssi);
+       } else {
+           ESP_LOGE(TAG, "Failed to get WiFi AP info");
+       }
 }

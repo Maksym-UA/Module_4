@@ -73,6 +73,7 @@ extern "C" void app_main(void)
     ESP_ERROR_CHECK(gpio_set_level(LED_GPIO, 0));
 
     wifi_init_sta();
+    vTaskDelay(pdMS_TO_TICKS(1000)); // Give WiFi time to stabilize
     mqtt_set_message_handler(handle_mqtt_message);
     mqtt_app_start();
 
