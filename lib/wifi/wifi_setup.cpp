@@ -81,7 +81,7 @@ void wifi_init_sta(void)
     } else {
         ESP_LOGE(TAG, "Connection failed: %s", WIFI_SSID);
     }
-   
+
        // Verify WiFi is actually connected
        wifi_ap_record_t ap_info;
        if (esp_wifi_sta_get_ap_info(&ap_info) == ESP_OK) {
